@@ -1,0 +1,7 @@
+CodingDrone==1.0.4
+# 아래 두 개는 CodingDrone 의 의존성이라 자동으로 설치된다 (기록용)
+# pyserial>=3.4
+# numpy>=1.15.4
+
+# 노트북으로 실습할 때만 필요
+jupyter
