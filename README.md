@@ -17,6 +17,10 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `07_button_turtle.py` | 버튼으로 turtle 도형 그리기 |
 | `08_joystick_event.py` | 조종기 조이스틱 입력 (`DataType.Joystick`) |
 | `09_joystick_direction.py` | [과제] 조이스틱 방향 → TM/BM/ML/MR 출력 |
+| `10_buzzer.py` | 부저 — `sendBuzzerScale` / `sendBuzzerHz` / Reserve |
+| `11_buzzer_song.py` | 부저로 "학교종이 땡땡땡" 연주 |
+| `12_vibrator.py` | 진동 — `sendVibrator` 와 저수준 `transfer` |
+| `13_button_melody.py` | [과제] 버튼으로 "비행기" 연주 + 진동 |
 
 ## 환경 구축
 
@@ -170,6 +174,63 @@ BL  BM  BR        None_ = 정의하지 않은 영역(무시)
 주피터는 셀이 끝나도 커널이 살아 있어 `mainloop()` 없이도 되는 것처럼 보이지만,
 `.py` 로 돌리면 핸들러만 걸고 프로세스가 바로 끝나 버린다. 스크립트에는 대기 루프나 `mainloop()` 가 필요하다.
 
+## 부저 / 진동 — 소리는 조종기가 낸다
+
+부저도 진동도 **조종기**가 낸다. 프레임의 목적지가 `DeviceType.Controller`(0x20) 다.
+드론 본체는 관여하지 않으므로 프로펠러 없이도 실습할 수 있다.
+
+### 부저
+
+```python
+dron.sendBuzzerScale(BuzzerScale.C4, 400)   # 음계로 (실습에서 가장 많이 쓴다)
+dron.sendBuzzerHz(440, 500)                 # 주파수로
+dron.sendBuzzerMute(10)                     # 묵음
+dron.sendBuzzer(BuzzerMode.Scale, BuzzerScale.A4.value, 500)  # 저수준
+```
+
+`BuzzerMode` 는 `Mute` / `Scale` / `Hz` 와 각각의 `Reserve`(예약) 버전, 그리고 `Stop`.
+**Reserve 계열은 바로 전에 호출한 소리가 끝난 뒤 이어서 재생되도록 예약**한다.
+그래서 `sendBuzzerScale` + `sendBuzzerScaleReserve` 로 두 음을 sleep 없이 붙일 수 있다.
+
+`BuzzerScale` 은 `C1`~`B8` 이고 샵은 `CS4` 처럼 `S` 를 붙인다.
+실습에 쓰는 4옥타브대는 **도 `C4` / 레 `D4` / 미 `E4` / 파 `F4` / 솔 `G4` / 라 `A4` / 시 `B4`**.
+`Mute`(0xEE) `Fin`(0xFF) `EndOfType` 은 음이 아니라 특수값이다.
+
+**⚠️ `time` 이 `int` 가 아니면 조용히 무시된다.**
+`sendBuzzerScale()` 은 내부에서 `isinstance(time, int)` 를 검사하고, 아니면
+아무것도 보내지 않고 `None` 을 반환한다. **예외가 나지 않는다.**
+파이썬의 `/` 는 항상 float 이라 박자를 계산해 넣을 때 자주 밟는다.
+"소리가 안 나는데 에러도 없다" 면 `time` 부터 본다. → `int()` 로 감쌀 것.
+
+**시간이 두 개다.** `sendBuzzerScale(scale, time)` 의 `time` 은 조종기가 소리를 내는 길이이고,
+이 함수는 명령만 보내고 바로 반환한다. 파이썬 쪽에서 `sleep` 을 하지 않으면
+다음 음 명령이 곧바로 날아가 앞 음을 덮어쓴다. 둘을 같이 맞춰야 한다.
+음 사이를 조금(여기서는 60ms) 띄우지 않으면 "미미미" 가 늘어진 "미—" 하나로 들린다.
+
+### 진동
+
+```python
+dron.sendVibrator(on, off, total)         # on: 진동 ms, off: 쉼 ms, total: 전체 ms
+dron.sendVibratorReserve(on, off, total)  # mode = Continually (예약)
+```
+
+`on=100, off=200, total=900` 이면 "부웅 (쉼) 부웅 (쉼) 부웅" 3회.
+
+수업에서는 `Header` + `Vibrator` 를 직접 만들어 `dron.transfer(header, data)` 로 보냈는데,
+**CodingDrone 1.0.4 에는 부저와 마찬가지로 `sendVibrator()` 래퍼가 있다.**
+라이브러리 소스를 열어 보면 래퍼 본문이 그 저수준 코드와 같다.
+직접 조립하는 건 `mode` 를 손대야 할 때만 필요하다 (`12_vibrator.py` 에 둘 다 남겨 뒀다).
+
+저수준으로 보낼 때 `header.from_` 은 **`DeviceType.Base`(0x70 = 내 PC)** 로 맞춘다.
+`Tester`(0xA0) 도 존재하고 동작도 하지만, 라이브러리 래퍼는 전부 `Base` 를 쓴다.
+
+### 콜백에서 멜로디를 재생하지 말 것
+
+버튼 콜백은 백그라운드 수신 스레드에서 불린다. 그 안에서 멜로디를 끝까지 재생하면
+수 초 동안 수신 스레드가 `sleep` 에 붙잡혀, 그 사이 들어온 버튼·조이스틱 프레임이 전부 밀린다.
+콜백은 큐에 요청만 넣고 재생은 메인 루프에서 한다 — turtle 을 메인 스레드로 옮긴 것과 같은 해법.
+진동은 프레임 한 개로 끝나므로 콜백에서 바로 보내도 된다.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -188,6 +249,11 @@ BL  BM  BR        None_ = 정의하지 않은 영역(무시)
 | turtle 이 클릭해도 안 그려짐 | `penup()` 을 `penpu()` 로 오타 — 콜백 안에서 조용히 터짐 | 위와 같음 |
 | 버튼 한 번 눌렀는데 도형이 여러 개 | `Press` 이벤트가 누르는 동안 반복 수신 | `ButtonEvent.Down` 만 처리 |
 | 조이스틱 출력이 폭포처럼 쏟아짐 | `Stay` 이벤트가 초당 수백 번 | `JoystickEvent.In` 만 출력하거나 값 변화 시에만 출력 |
+| 부저가 소리를 안 내는데 에러도 없음 | `time` 인자가 float — 라이브러리가 `isinstance(int)` 검사 후 조용히 `None` 반환 | `int()` 로 감싼다 |
+| 음이 이어져 한 음처럼 들림 | 같은 음을 틈 없이 연속 전송 | 음 사이 60ms 정도 띄운다 |
+| 앞 음이 끊기고 다음 음이 나옴 | 명령 시간(ms)만 주고 파이썬은 안 쉼 | `sleep` 으로 같이 맞춘다 |
+| 연주 중 누른 버튼이 늦게 처리됨 | 콜백 안에서 멜로디를 끝까지 재생 → 수신 스레드 블로킹 | 콜백은 큐에 넣고 메인 루프에서 재생 |
+| `transfer(hasattr, data)` | `header` 오타. `hasattr` 은 내장 함수라 `NameError` 조차 안 난다 | `transfer(header, data)` |
 
 ## 주요 상수
 
@@ -198,6 +264,9 @@ BL  BM  BR        None_ = 정의하지 않은 영역(무시)
 - **`DataType`** — `State`(0x40) 배터리·비행상태, `Attitude`(0x41) 기울기,
   `Altitude`(0x43) 고도, `Range`(0x45) 거리센서
 - **`DeviceType`** — `Drone`(0x10) `Controller`(0x20) `Base`(0x70)
+- **`BuzzerMode`** — `Mute` `Scale` `Hz` + 각각의 `Reserve`, `Stop`
+- **`BuzzerScale`** — `C1`~`B8`, 샵은 `CS4` 형태. `Mute`(0xEE) `Fin`(0xFF) 은 특수값
+- **`VibratorMode`** — `Instantly`(즉시) `Continually`(예약) `Stop`
 
 각 enum 의 `None_` 과 `EndOfType` 은 실제 명령이 아니라 경계값이므로 무시한다.
 
