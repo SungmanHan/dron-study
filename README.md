@@ -24,6 +24,10 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `14_display_shape.py` | 조종기 LCD — 지우기 / 반전 / 점 · 선 · 사각형 · 원 |
 | `15_display_string.py` | 조종기 LCD — 문자열 / 정렬 문자열 |
 | `16_display_random_initials.py` | [과제] 이니셜 + 원을 랜덤 위치로 10회 출력 |
+| `17_light_manual.py` | LED 수동 제어 — `sendLightManual` (조종기 / 드론) |
+| `18_light_mode.py` | LED 모드 제어 — `sendLightMode*` / `sendLightEvent*` |
+| `19_light_random_dimming.py` | 랜덤 색 디밍 — RGB / `Colors` 팔레트 / 드론 |
+| `20_drone_light_random_dimming_20.py` | [과제] 드론 LED 랜덤 디밍 20회 + 실행 로그 |
 
 ## 환경 구축
 
@@ -295,6 +299,78 @@ message = "HAN"   ->  header.length = 6 + 3 = 9,  실제 데이터도 9바이트
 글꼴 크기 x 글자 수만큼 여유를 빼고 뽑는다 (`16_display_random_initials.py`).
 10x16 글꼴로 3글자면 `x ≤ 98`, `y ≤ 48`.
 
+## LED — 수동 제어 vs 모드 제어
+
+LED 함수는 두 계열이다.
+
+| 계열 | 함수 | 목적지 지정 방법 |
+|---|---|---|
+| **수동** | `sendLightManual(deviceType, flags, brightness)` | `deviceType` **인자로** 지정 |
+| **모드** | `sendLightModeColor` / `sendLightModeColors` / `sendLightEventColor` / `sendLightEventColors` | `lightMode` **enum 타입으로** 결정 |
+
+깜빡임·디밍 같은 패턴은 **펌웨어가 만든다.** 모드와 색만 주면 되고,
+`Dimming`(천천히 밝아졌다 어두워짐) 을 코드로 구현할 필요가 없다.
+`Event` 계열은 여기에 `repeat`(반복 횟수)이 붙은 것뿐이다.
+
+```python
+dron.sendLightManual(DeviceType.Controller, LightFlagsController.BodyRed.value, 10)
+dron.sendLightModeColor(LightModeController.BodyDimming, 3, 200, 0, 200)   # interval, r, g, b
+dron.sendLightModeColors(LightModeDrone.BodyDimming, 3, Colors.Cyan)
+dron.sendLightEventColor(LightModeDrone.BodyDimming, 3, 5, 200, 200, 200)  # interval, repeat, rgb
+```
+
+### 목적지는 `lightMode` 의 타입이 정한다
+
+`sendLightMode*` / `sendLightEvent*` 에는 `deviceType` 인자가 **없다.**
+라이브러리가 넘어온 `lightMode` 가 어느 enum 인지 보고 목적지를 정한다.
+
+```
+LightModeController.BodyDimming  ->  header.to_ = Controller
+LightModeDrone.BodyDimming       ->  header.to_ = Drone
+int 를 그냥 넘기면                ->  Drone
+```
+
+"드론도 조종기와 사용법이 같고 첫 인자만 바꾸면 된다" 는 말의 실제 내용이 이것이다.
+
+### flags 값은 조종기와 드론이 다르다
+
+```
+LightFlagsController : BodyRed 0x01  BodyGreen 0x02  BodyBlue 0x04
+LightFlagsDrone      : Rear    0x01  BodyRed   0x02  BodyGreen 0x04  BodyBlue 0x08  A 0x10  B 0x20
+```
+
+`flags` 는 enum 이 아니라 **int** 라서 `.value` 를 붙여야 한다. 안 붙이면 타입 검사에 걸려
+조용히 무시된다. OR 로 합칠 수 있고(`BodyRed.value | BodyBlue.value`),
+`0xFF` + brightness 0 이면 전부 끄기다.
+
+모드 목록은 `LightModeController` 가 Body 계열만, `LightModeDrone` 은 `Rear` / `Body` / `A` / `B`
+네 그룹에 같은 패턴(`Hold` `Flicker` `FlickerDouble` `Dimming` `Sunrise` `Sunset`)이 반복된다.
+무지개(`BodyRainbow`, `BodyRainbow2`)는 양쪽 다 있다.
+
+### 반환값은 응답이 아니라 송신 프레임
+
+`sendLight*` 의 반환값을 찍는 예제가 나오는데, 드론이 보낸 답이 아니라
+`transfer()` 가 **방금 시리얼에 써 보낸 바이트열**을 그대로 돌려준 것이다.
+(포트가 닫혀 있으면 `None`, 인자 타입이 틀려도 `None`)
+드론의 응답을 보려면 `03_ping_event.py` 처럼 `setEventHandler` 로 받아야 한다.
+
+바이트열을 16진수로 찍는 `convertByteArrayToString()` 은 **라이브러리에 이미 있다**
+(`CodingDrone/drone.py`). 직접 만들 필요 없이 `from CodingDrone.drone import convertByteArrayToString`.
+
+### `Colors.EndOfType` 은 색이 아니다
+
+```python
+Colors(random.randint(0, Colors.EndOfType.value))       # EndOfType(141) 이 뽑힐 수 있다
+Colors(random.randint(0, Colors.EndOfType.value - 1))   # 실제 색은 0 ~ 140
+```
+
+`randint` 는 **상한을 포함**한다. `EndOfType` 은 목록의 끝을 표시하는 경계값이다.
+
+### 모드는 끌 때까지 유지된다
+
+스크립트가 끝나도 드론·조종기는 마지막 패턴을 계속 유지한다.
+`finally` 에서 `sendLightManual(deviceType, 0xFF, 0)` 으로 소등한다.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -322,6 +398,11 @@ message = "HAN"   ->  header.length = 6 + 3 = 9,  실제 데이터도 9바이트
 | 그리기 명령이 아무 반응 없음 | `pixel`/`font` 등을 int 로 넘김 — 라이브러리가 isinstance 검사 후 조용히 `None` 반환 | `DisplayPixel(1)` 처럼 enum 으로 |
 | 랜덤 출력이 화면 밖으로 잘림 | 좌표가 좌상단 기준인데 0~127 / 0~63 전 범위에서 뽑음 | 글꼴 크기 x 글자 수만큼 빼고 뽑는다 |
 | `import random` 없이 `random` 이 동작함 | `from CodingDrone.drone import *` 가 drone.py 의 `import random` 까지 끌고 옴 | 우연히 되는 것이므로 직접 import |
+| LED 가 안 켜짐 | `flags` 에 `.value` 를 안 붙여 enum 을 넘김 — isinstance(int) 검사에 걸려 조용히 무시 | `LightFlagsController.BodyRed.value` |
+| 반환값을 드론 응답으로 오해 | `transfer()` 는 **보낸 바이트열**을 돌려준다 | 응답은 `setEventHandler` 로 받는다 |
+| 랜덤 색에 이상한 값이 섞임 | `randint(0, Colors.EndOfType.value)` — 상한 포함이라 경계값이 뽑힘 | `- 1` 을 해서 0~140 |
+| 스크립트가 끝나도 LED 가 계속 켜져 있음 | Mode 계열은 끌 때까지 유지 | `finally` 에서 `sendLightManual(..., 0xFF, 0)` |
+| `open()` 을 인자 없이 호출 | 포트 목록의 **마지막 것**을 고른다 — 드론 동글이라는 보장이 없다 | `drone_util.find_port()` |
 
 ## 주요 상수
 
@@ -337,6 +418,9 @@ message = "HAN"   ->  header.length = 6 + 3 = 9,  실제 데이터도 9바이트
 - **`VibratorMode`** — `Instantly`(즉시) `Continually`(예약) `Stop`
 - **`DisplayPixel`** — `Black` `White` `Inverse` `Outline` / **`DisplayLine`** — `Solid` `Dotted` `Dashed`
 - **`DisplayFont`** — `LiberationMono5x8` `LiberationMono10x16` / **`DisplayAlign`** — `Left` `Center` `Right`
+- **`LightFlagsController` / `LightFlagsDrone`** — 켤 LED 비트. **값이 서로 다르다**
+- **`LightModeController` / `LightModeDrone`** — `Hold` `Flicker` `FlickerDouble` `Dimming` `Sunrise` `Sunset` `Rainbow`
+- **`Colors`** — 색 이름 팔레트 0~140 (`EndOfType`=141 은 경계값)
 
 각 enum 의 `None_` 과 `EndOfType` 은 실제 명령이 아니라 경계값이므로 무시한다.
 
