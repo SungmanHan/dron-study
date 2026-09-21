@@ -26,7 +26,7 @@ from CodingDrone.protocol import DeviceType, DisplayFont, DisplayPixel
 
 from drone_util import find_port
 
-INITIALS = "HAN"  # 본인 이니셜로 바꿀 것. 영문/숫자만 (한글은 표시되지 않는다)
+INITIALS = "SH"  # 본인 이니셜로 바꿀 것. 영문/숫자만 (한글은 표시되지 않는다)
 FONT = DisplayFont.LiberationMono10x16
 
 WIDTH, HEIGHT = 128, 64
