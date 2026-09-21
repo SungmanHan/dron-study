@@ -21,6 +21,9 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `11_buzzer_song.py` | 부저로 "학교종이 땡땡땡" 연주 |
 | `12_vibrator.py` | 진동 — `sendVibrator` 와 저수준 `transfer` |
 | `13_button_melody.py` | [과제] 버튼으로 "비행기" 연주 + 진동 |
+| `14_display_shape.py` | 조종기 LCD — 지우기 / 반전 / 점 · 선 · 사각형 · 원 |
+| `15_display_string.py` | 조종기 LCD — 문자열 / 정렬 문자열 |
+| `16_display_random_initials.py` | [과제] 이니셜 + 원을 랜덤 위치로 10회 출력 |
 
 ## 환경 구축
 
@@ -231,6 +234,67 @@ dron.sendVibratorReserve(on, off, total)  # mode = Continually (예약)
 콜백은 큐에 요청만 넣고 재생은 메인 루프에서 한다 — turtle 을 메인 스레드로 옮긴 것과 같은 해법.
 진동은 프레임 한 개로 끝나므로 콜백에서 바로 보내도 된다.
 
+## 조종기 LCD — Display
+
+조종기에는 **128 x 64 흑백 LCD** 가 있다. 좌표는 `x 0~127`, `y 0~63` 이고 **원점은 좌상단**.
+부저·진동과 마찬가지로 목적지가 조종기라 드론 본체 없이 실습할 수 있다.
+
+```python
+dron.sendDisplayClearAll(pixel)                          # 전체를 pixel 색으로 채움
+dron.sendDisplayClear(x, y, w, h, pixel)                 # 일부만
+dron.sendDisplayInvert(x, y, w, h)                       # 일부 반전
+dron.sendDisplayDrawPoint(x, y, pixel)
+dron.sendDisplayDrawLine(x1, y1, x2, y2, pixel, line)
+dron.sendDisplayDrawRect(x, y, w, h, pixel, fill, line)
+dron.sendDisplayDrawCircle(x, y, radius, pixel, fill)
+dron.sendDisplayDrawString(x, y, message, font, pixel)
+dron.sendDisplayDrawStringAlign(x_start, x_end, y, message, align, font, pixel)
+```
+
+**"Clear" 는 지운다기보다 그 영역을 지정한 색으로 칠한다.**
+`ClearAll(Black)` 뒤에 `Clear(..., White)` 를 하면 그 자리가 흰 사각형이 된다.
+
+| enum | 값 |
+|---|---|
+| `DisplayPixel` | `Black`(0) `White`(1) `Inverse`(2) `Outline`(3) — **4개다** |
+| `DisplayLine` | `Solid`(0) `Dotted`(1) `Dashed`(2) |
+| `DisplayFont` | `LiberationMono5x8`(0) `LiberationMono10x16`(1) |
+| `DisplayAlign` | `Left`(0) `Center`(1) `Right`(2) |
+
+인자 타입을 틀리면 **조용히 무시된다.** `pixel` / `line` / `font` / `align` 은 enum 이어야 한다.
+`sendDisplayDrawPoint(64, 32, 1)` 은 아무 일도 일어나지 않고, 에러도 안 난다 → `DisplayPixel(1)`.
+
+### 문자열 — 래퍼가 이미 있다
+
+수업에서는 `Header` + `DisplayDrawString` 을 직접 만들고
+`header.length = getSize() + len(message)` 로 다시 계산한 뒤 `transfer()` 로 보냈는데,
+**`sendDisplayDrawString()` / `sendDisplayDrawStringAlign()` 래퍼의 본문이 바로 그 코드다.**
+길이 재계산도 래퍼가 해 준다 (진동의 `sendVibrator` 와 같은 상황).
+
+문자열 프레임만 길이를 다시 계산하는 이유는, 다른 데이터는 크기가 고정이지만
+문자열은 뒤에 `message` 가 그대로 붙는 **가변 길이 프레임**이기 때문이다.
+
+래퍼는 **`message` 가 세 번째 인자**다. 데이터 객체의 필드 순서(x, y, font, pixel, message)와
+달라서 저수준 코드를 래퍼로 옮길 때 헷갈리기 쉽다.
+
+**⚠️ 한글은 조용히 사라진다.** `toArray()` 가 `message.encode('ascii', 'ignore')` 라
+ASCII 가 아닌 글자는 에러 없이 버려진다. 게다가 `length` 는 **문자 수**로 계산되어
+헤더 길이와 실제 바이트 수가 어긋난다. 실측:
+
+```
+message = "한글"  ->  header.length = 6 + 2 = 8  인데 실제 데이터는 6바이트
+message = "HAN"   ->  header.length = 6 + 3 = 9,  실제 데이터도 9바이트
+```
+
+화면에 아무것도 안 나오거나 깨지는 이유가 이것이다. **영문/숫자만 쓴다.**
+
+### 랜덤 좌표는 화면 밖으로 나간다
+
+좌표가 좌상단 기준이라 `x`, `y` 는 글자·도형의 **왼쪽 위**다.
+`randint(0, 127)` / `randint(0, 63)` 으로 뽑으면 오른쪽·아래가 잘린다.
+글꼴 크기 x 글자 수만큼 여유를 빼고 뽑는다 (`16_display_random_initials.py`).
+10x16 글꼴로 3글자면 `x ≤ 98`, `y ≤ 48`.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -254,6 +318,10 @@ dron.sendVibratorReserve(on, off, total)  # mode = Continually (예약)
 | 앞 음이 끊기고 다음 음이 나옴 | 명령 시간(ms)만 주고 파이썬은 안 쉼 | `sleep` 으로 같이 맞춘다 |
 | 연주 중 누른 버튼이 늦게 처리됨 | 콜백 안에서 멜로디를 끝까지 재생 → 수신 스레드 블로킹 | 콜백은 큐에 넣고 메인 루프에서 재생 |
 | `transfer(hasattr, data)` | `header` 오타. `hasattr` 은 내장 함수라 `NameError` 조차 안 난다 | `transfer(header, data)` |
+| LCD 에 문자열이 안 나옴 | 한글 — `encode('ascii', 'ignore')` 로 버려지고 헤더 길이까지 어긋남 | 영문/숫자만 사용 |
+| 그리기 명령이 아무 반응 없음 | `pixel`/`font` 등을 int 로 넘김 — 라이브러리가 isinstance 검사 후 조용히 `None` 반환 | `DisplayPixel(1)` 처럼 enum 으로 |
+| 랜덤 출력이 화면 밖으로 잘림 | 좌표가 좌상단 기준인데 0~127 / 0~63 전 범위에서 뽑음 | 글꼴 크기 x 글자 수만큼 빼고 뽑는다 |
+| `import random` 없이 `random` 이 동작함 | `from CodingDrone.drone import *` 가 drone.py 의 `import random` 까지 끌고 옴 | 우연히 되는 것이므로 직접 import |
 
 ## 주요 상수
 
@@ -267,6 +335,8 @@ dron.sendVibratorReserve(on, off, total)  # mode = Continually (예약)
 - **`BuzzerMode`** — `Mute` `Scale` `Hz` + 각각의 `Reserve`, `Stop`
 - **`BuzzerScale`** — `C1`~`B8`, 샵은 `CS4` 형태. `Mute`(0xEE) `Fin`(0xFF) 은 특수값
 - **`VibratorMode`** — `Instantly`(즉시) `Continually`(예약) `Stop`
+- **`DisplayPixel`** — `Black` `White` `Inverse` `Outline` / **`DisplayLine`** — `Solid` `Dotted` `Dashed`
+- **`DisplayFont`** — `LiberationMono5x8` `LiberationMono10x16` / **`DisplayAlign`** — `Left` `Center` `Right`
 
 각 enum 의 `None_` 과 `EndOfType` 은 실제 명령이 아니라 경계값이므로 무시한다.
 
