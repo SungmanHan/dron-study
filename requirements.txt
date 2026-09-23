@@ -6,7 +6,9 @@ CodingDrone==1.0.4
 # 노트북으로 실습할 때만 필요
 jupyter
 
-# 21강 영상인식 (39, 40) — 둘은 같은 cv2 를 설치하므로 하나만 고를 것
-opencv-python                # 확인한 환경: 5.0.0.93
-# opencv-contrib-python      # contrib 기능이 필요하면 이쪽 하나만 설치
+# 21~23강 영상인식 (39~49)
+# ⚠️ 4.x 로 고정한다 — 5.0 에는 CascadeClassifier 와 haarcascade xml 이 없다 (23강 얼굴 인식)
+# --only-binary=:all: 를 붙여야 소스 컴파일로 새지 않는다:
+#   pip install --only-binary=:all: "opencv-python<5"
+opencv-python<5              # 확인한 환경: 4.10.0.84 (macOS 12 Intel / Python 3.12)
 matplotlib                   # 맥 주피터에서 이미지 보기 (BGR -> RGB)
