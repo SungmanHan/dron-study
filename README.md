@@ -46,6 +46,8 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `36_mission_obstacle_stop.py` | [미션4·5] 전방 센서 감지 → 착륙 / 회피 후 착륙 ⚠️이륙 |
 | `37_mission_land_on_target.py` | [미션6] 하방 센서로 높은 목적지 감지 → 그 위에 착륙 ⚠️이륙 |
 | `38_assignment_route_obstacle.py` | [과제] 버튼 출발 + 경로 비행 + 장애물 회피 + LED ⚠️이륙 |
+| `39_opencv_check.py` | OpenCV 설치 확인 — 버전 / 중복 설치 / GUI 백엔드 |
+| `40_opencv_image_read.py` | OpenCV 이미지 읽기 — `imread` / `imshow` (+ matplotlib) |
 
 ## 환경 구축
 
@@ -756,6 +758,95 @@ dron.sendLightModeColor(LightModeDrone.BodyHold, 200, 0, 255, 0)   # 초록 점�
 라이브러리는 막지 않지만(위치 명령에는 범위 검사가 없다) 기체가 굼뜨거나 한 조각을 제자리에서
 흘려보낼 수 있다. 38 의 `ROOM = "NARROW"` 는 그걸 감수한 타협이다 — 넓은 곳에서는 `"WIDE"`.
 
+## 영상인식 OpenCV — 드론에서 잠깐 내려온다
+
+21 강은 드론을 날리지 않는다. 인공지능 이론과 OpenCV 설치까지다. (`39`, `40`)
+
+### 인공지능 ⊃ 머신러닝 ⊃ 딥러닝
+
+| | 머신러닝 | 딥러닝 |
+|---|---|---|
+| 지능의 원천 | 통계학습 | 자가학습 |
+| 특징 파악 | **사람이** 데이터 정보를 준다 | **스스로** 특징을 찾아 분류한다 |
+| 관계 | 상위 개념 | 머신러닝의 하위 분야 |
+| 예 | 추천 서비스 | 알파고 |
+
+- **머신러닝 학습 종류** — 지도학습(분류 / 회귀), 비지도학습(군집 / 차원 축소),
+  강화학습(완전한 답 대신 **보상**을 준다. 게임·로봇 학습에 주로 쓴다)
+- **딥러닝 대표 모델** — CNN(시신경 구조 모방, 얼굴인식·문장분류) /
+  RNN(순차 데이터 반복 학습, 음성인식·번역) / GAN(두 모델이 대결하며 학습, 창작물)
+- **연표** — 1943 인공신경망 연구 시작(맥클록·피츠) → 1950 튜링 테스트(앨런 튜링)
+  → 1956 다트머스 회의에서 'AI' 라는 말이 처음 쓰임
+
+| | OpenCV | TensorFlow |
+|---|---|---|
+| 성격 | 실시간 컴퓨터 비전 라이브러리 | 머신러닝 엔진 |
+| 만든 곳 | 인텔 | 구글 (2015 오픈소스 전환) |
+| 작성 언어 | C/C++ | C++ |
+| 파이썬 | 바인딩 제공 (자바·매트랩도) | API 제공 |
+
+### 설치 — 강의대로 하면 안 되는 한 가지
+
+슬라이드는 `opencv-python` 과 `opencv-contrib-python` 을 **둘 다** 깔라고 하는데,
+두 패키지는 같은 `cv2/` 디렉터리를 설치한다(설치된 `opencv-python` 의 dist-info RECORD 는
+실제로 전부 `cv2/...` 였다. contrib 도 같은 자리를 쓴다).
+pip 는 합쳐 주지 않고 덮어쓰므로 섞이면 버전 불일치·기능 누락이 난다. **하나만** 고른다.
+contrib 쪽이 메인 모듈을 포함하니 contrib 하나면 충분하다.
+
+맥에는 "cmd 관리자 권한 실행" 이 없다. 드론 실습용 venv 를 그대로 쓰면 되고 `sudo` 도 필요 없다.
+
+```bash
+source .venv/bin/activate
+pip install opencv-contrib-python matplotlib
+python -c "import cv2; print(cv2.__version__)"
+```
+
+- `numpy` 는 CodingDrone 이 의존성으로 이미 깔아 둔다. 영상이 곧 숫자 행렬이라 필요한 것.
+- **설치 이름은 `opencv-python`, import 이름은 `cv2`** 다. `import opencv` 는 없다.
+- 확인한 버전은 **5.0.0** (슬라이드의 `4.4.0` 은 촬영 당시 값이다. 달라도 정상).
+- `opencv-python-headless` 가 깔리면 `imshow` 가 안 된다. `39` 가 GUI 백엔드를 찍어 준다
+  (맥은 `COCOA`, headless 는 `NONE`).
+
+### 읽는 두 줄, 보여주는 세 줄
+
+| 코드 | 뜻 |
+|---|---|
+| `cv.imread(경로)` | 컬러로 읽기 (`IMREAD_COLOR` = 1) |
+| `cv.imread(경로, 0)` | 흑백으로 읽기 (`0` 은 `IMREAD_GRAYSCALE` 의 값. `-1` 은 알파까지) |
+| `cv.imshow(제목, img)` | 창에 올리기 — **이것만으로는 안 그려진다** |
+| `cv.waitKey(0)` | 키 대기. **창은 이 안에서 그려진다.** 밀리초를 주면 시간 초과 시 `-1` |
+| `cv.destroyAllWindows()` | 창 닫기 |
+
+슬라이드 코드를 그대로 치면 창이 안 뜨거나 회색으로 멈추는 이유가 이것이다.
+창의 X 버튼으로 닫으려 하지 말고 **창에 포커스를 준 채 키를 누른다.**
+
+읽은 결과는 numpy 배열이다 — 컬러 `(높이, 너비, 3)`, 흑백 `(높이, 너비)`, 값은 0~255.
+
+### 여기도 조용히 실패한다
+
+`imread` 는 경로가 틀려도 **예외를 던지지 않고 `None` 을 돌려준다.**
+
+```
+[ WARN:0@0.06] global loadsave.cpp:278 findDecoder imread_('/nope/none.jpg'): can't open/read file
+```
+
+경고 한 줄은 찍히지만 프로그램은 그대로 진행되고, 진짜 에러는 한참 뒤 `imshow` 나
+`shape` 에서 엉뚱한 모습으로 터진다. 드론 라이브러리가 인자 타입이 틀리면
+조용히 `None` 을 돌려주던 것과 같은 종류다. **읽은 직후 `is None` 검사가 정석.**
+
+### 색 순서가 BGR 이다
+
+OpenCV 는 파랑-초록-빨강 순으로 저장한다. 파란 픽셀을 찍으면 `[255 0 0]` 이 나온다.
+cv 끼리 주고받을 땐 상관없지만 matplotlib 으로 그릴 때는 바꿔야 색이 맞는다.
+
+```python
+plt.imshow(cv.cvtColor(img, cv.COLOR_BGR2RGB))   # 안 바꾸면 파랑↔빨강이 뒤집힌다
+plt.imshow(gray, cmap="gray")                    # 흑백은 cmap 을 줘야 회색으로 나온다
+```
+
+맥 주피터에서는 `cv.imshow` 창이 커널을 먹통으로 만드는 일이 잦으니 이 방식이 안전하다.
+`40` 의 `SHOW` 를 `"plot"` 으로 바꾸면 같은 그림을 matplotlib 으로 그린다.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -824,6 +915,13 @@ dron.sendLightModeColor(LightModeDrone.BodyHold, 200, 0, 255, 0)   # 초록 점�
 | 거리를 줄였더니 드론이 제자리에 머묾 | 속도 0.1 m/s·조각 0.05 m — 위치 명령 권장 속도(0.5~2.0) 아래 | 거리만 줄이고 속도는 유지. 막아 주지 않으니 에러도 안 난다 |
 | 전원 버튼을 눌렀는데 미션이 출발함 | 모든 버튼을 출발 신호로 봄 | `ButtonFlagController.TopRight`(0x0020) 제외 + `ButtonEvent.Down` 만 |
 | 하방 감지가 안 되거나 이륙하자마자 착륙 | `rangeHeight` 는 m 인데 mm 기준값을 넣음 / 호버링 높이를 안 재고 예시값 0.3~0.4 를 그대로 씀 | 21 번으로 이륙 후 `rangeHeight` 를 먼저 찍고 **호버링 높이 − 상자 높이 + 여유** 로 정한다 |
+| `ModuleNotFoundError: No module named 'opencv'` | 설치 이름(`opencv-python`)과 모듈 이름(`cv2`)이 다름 | `import cv2 as cv` |
+| `imshow` 를 불렀는데 창이 안 뜨거나 회색으로 멈춤 | 창은 `waitKey()` 안에서 그려진다 | `imshow` + `waitKey(0)` + `destroyAllWindows()` 세 줄 묶음 |
+| 경로를 고쳤는데도 뒤에서 엉뚱한 에러 | `imread` 는 실패해도 예외 없이 `None` 만 돌려준다 | 읽은 직후 `is None` 검사 |
+| `cv.imread('C:\image\drone.jpg')` 가 없는 경로를 찾음 | `\i` 등이 이스케이프로 해석됨 | raw 문자열 `r'...'` 또는 `/` 사용 |
+| matplotlib 으로 그렸더니 파랑↔빨강이 뒤바뀜 | OpenCV 는 BGR 순서로 저장한다 | `cv.cvtColor(img, cv.COLOR_BGR2RGB)` |
+| 흑백 이미지가 알록달록하게 나옴 | matplotlib 기본 컬러맵이 적용됨 | `plt.imshow(gray, cmap='gray')` |
+| OpenCV 를 깔았는데 버전이 슬라이드와 다름 | 슬라이드 `4.4.0` 은 촬영 당시 값 | 정상. `cv.__version__` 이 찍히면 설치 성공 |
 
 ## 주요 상수
 
