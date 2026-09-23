@@ -66,6 +66,9 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `56_feature_fragility.py` | 수동 특징이 언제 무너지는가 — 조명·각도·크기 실측 |
 | `57_conv_filter_basics.py` | 합성곱 — 커널 · 특징맵 · 풀링 · 파라미터 수 |
 | `58_detection_postprocess.py` | 탐지 결과 정리 — 신뢰도 · IoU · NMS (`cv.dnn.NMSBoxes`) |
+| `59_pygame_window.py` | Pygame 기본 창 — 렌더링 루프 · 더블 버퍼링 |
+| `60_pygame_camera.py` | 카메라 영상을 Pygame 창에 + 덧그리기(AR) 📷 |
+| `61_assignment_hello_drone.py` | [과제] 영상 위에 "Hello Drone" 띄우기 📷 |
 
 ⚠️이륙 = 드론이 실제로 뜬다 / 📷 = 카메라를 쓴다(`45` 는 `SOURCE = "demo"` 로 카메라 없이도 돌아간다)
 
@@ -1338,6 +1341,76 @@ Haar Cascade(23 강)도 같은 식으로 흔들어 봤다. 얼굴 두 개짜리 
 탐지 쪽은 **2 단계**(R-CNN → Fast → Faster: 후보 영역 생성 후 분류, 정확하지만 느림)와
 **1 단계**(YOLO·SSD: 한 번에 박스+클래스, 빠름)로 갈린다. 드론처럼 실시간 영상을 다루면 1 단계다.
 
+## Pygame — 출력과 입력을 나눈다 (AR 의 뼈대)
+
+28 강. (`59`~`61`) OpenCV 는 **입력**(카메라·분석), Pygame 은 **출력**(그리기·이벤트)을 맡는다.
+영상 위에 도형과 글자를 얹으면 그게 곧 간단한 AR 화면이다.
+세 파일 모두 `SOURCE = "demo"` / `MAX_SECONDS` 로 카메라 없이도 돌려 볼 수 있다.
+
+```bash
+pip install pygame       # venv 안에서. 확인한 버전 2.6.1 (SDL 2.28.4)
+```
+
+### 렌더링 루프는 네 줄이다
+
+```python
+for event in pygame.event.get():   # 1) 이벤트 — 안 꺼내면 창이 '응답 없음' 이 된다
+    ...
+screen.fill((0, 0, 0))             # 2) 뒤 버퍼에 그리기
+pygame.display.flip()              # 3) 앞뒤 버퍼 교체 (더블 버퍼링)
+clock.tick(30)                     # 4) 속도 제한
+```
+
+**더블 버퍼링** — 보이는 버퍼와 그리는 버퍼를 따로 두고 다 그린 뒤 통째로 바꾸므로
+중간 과정이 보이지 않는다(깜빡임·찢어짐 없음). 일부만 바뀌면 `display.update(rect)` 가 싸지만
+카메라 영상처럼 전체가 바뀌면 `flip()` 이 맞다.
+`pygame.event.get()` 은 OS 이벤트 큐를 비우는 일도 한다 — 23 강의 `cv.waitKey()` 와 같은 자리다.
+
+**`clock.tick()` 을 빼면 같은 그림을 미친 듯이 다시 그린다.** headless 로 재 보면
+tick 없이 **1 초에 8,884 회**, `tick(30)` 이면 **29 회**. 보이는 결과는 같고 CPU 만 태운다.
+강의 예제1 이 `clock` 을 만들어 놓고 `tick()` 을 안 부른다.
+
+### 카메라 프레임 → Surface: 색과 축을 맞춘다
+
+| 단계 | 하는 일 |
+|---|---|
+| `cap.read()` | `(높이, 너비, 3)` BGR 배열 |
+| `cvtColor(..., BGR2RGB)` | Pygame 은 RGB 로 읽는다 |
+| `make_surface(rgb.swapaxes(0, 1))` | `surfarray` 는 `(너비, 높이, 3)` = `[x][y]` 로 해석한다 |
+
+축을 안 맞추면 **전치된다.** 가로로 긴 띠를 넣고 확인해 보면:
+
+| | Surface 크기 | (x=100, y=10) | (x=10, y=100) |
+|---|---|---|---|
+| `swapaxes` 없이 | (480, 640) | 검정 | **빨강** (띠가 세로로 섰다) |
+| `swapaxes(0, 1)` | (640, 480) | **빨강** | 검정 |
+| `image.frombuffer` | (640, 480) | **빨강** | 검정 |
+
+### 전치는 공짜가 아니다 — `frombuffer` 가 39배 빠르다
+
+640x480 프레임 200 장 기준(변환 함수만):
+
+| 방법 | 프레임당 | 초당 한계 |
+|---|---|---|
+| `make_surface` + `swapaxes` | 4.72 ms | 212 장 |
+| `image.frombuffer` | **0.12 ms** | 8,177 장 |
+
+BGR→RGB 까지 포함해 `60` 이 직접 찍은 값은 `frombuffer` 0.6 ms / `make_surface` 4.0 ms 였다.
+30 fps 면 한 프레임에 33 ms 가 있으니 강의 방식으로도 충분하지만, 얼굴 인식(48)이나
+색 추적(50)을 함께 돌리면 이 4 ms 가 아깝다. `60` 의 `SURFACE_MODE` 로 바꿔 가며 볼 수 있다.
+
+### 강의 코드에서 고친 것
+
+- **`import sys` 없이 `exit()` 호출.** `exit()` 는 대화형 셸용 헬퍼라 스크립트·주피터에서 불안정하다 → `sys.exit()`.
+- **`clock.tick()` 누락** (위 참고). 순서도 "그리기 → flip → 이벤트" 대신 **이벤트 → 그리기 → flip → tick**.
+- **종료 경로가 세 군데**(QUIT / ESC / break)라 `cap.release()` 를 빠뜨리기 쉽다 →
+  `try/finally` 한 곳으로. 안 하면 **카메라 LED 가 켜진 채 남는다.**
+- **과제 코드는 카메라 열기에 실패하면 창을 남긴다** — `pygame.init()` 으로 창을 띄운 뒤
+  `pygame.quit()` 없이 `sys.exit()` 만 부른다. 먼저 닫고 끝내도록 고쳤다.
+- 고정 문구는 루프 밖에서 한 번만 `render` 해 두고 `blit` 만 한다.
+- **기본 폰트로 한글은 안 나온다.** `SysFont(None, 48)` 에는 한글 글리프가 없다 —
+  macOS 는 `"applegothic"` 같은 시스템 폰트 이름을 주거나 `pygame.font.Font(경로, 크기)`.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -1452,6 +1525,13 @@ Haar Cascade(23 강)도 같은 식으로 흔들어 봤다. 얼굴 두 개짜리 
 | 고개를 돌렸더니 얼굴이 안 잡힘 | Haar 는 정면 명암 패턴 가정 — 20도면 0개 | 각도 제한을 알고 쓰거나 CNN 검출기로 |
 | 한 물체에 박스가 여러 개 | 탐지기 출력은 후보 박스 수천 개다 | 신뢰도 임계값 + `cv.dnn.NMSBoxes` |
 | NMS 를 했는데 붙어 있는 두 물체가 하나로 | NMS 임계값이 너무 낮다 | 임계값을 올린다(장면마다 다르다) |
+| Pygame 창이 '응답 없음' | 루프에서 `pygame.event.get()` 을 안 부름 | 매 프레임 이벤트를 꺼낸다 |
+| 영상이 90도 돌아가고 찌그러짐 | `surfarray` 는 `[x][y]` 로 읽는다 | `rgb.swapaxes(0, 1)` 또는 `image.frombuffer` |
+| 파랑과 빨강이 뒤바뀜 | OpenCV 는 BGR, Pygame 은 RGB | `cvtColor(..., COLOR_BGR2RGB)` |
+| 아무것도 안 하는데 CPU 가 100% | `clock.tick()` 누락 — 초당 8,884회 루프 | `clock.tick(30)` |
+| 종료했는데 카메라 LED 가 켜져 있음 | 종료 경로에서 `cap.release()` 누락 | `try/finally` 로 모은다 |
+| 한글 메시지가 네모로 나옴 | 기본 폰트에 한글 글리프가 없다 | 시스템 폰트 지정(macOS `applegothic`) |
+| 주피터에서 셀이 끝났는데 창이 남음 | `pygame.quit()` 미호출 | `finally` 에서 호출 |
 
 ## 주요 상수
 
