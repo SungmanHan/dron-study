@@ -7,7 +7,7 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 
 | 파일 | 내용 |
 |---|---|
-| `drone_util.py` | 동글 포트 자동 탐색 |
+| `drone_util.py` | 동글 포트 자동 탐색 + 명령 완료 대기(`countdown`) |
 | `01_list_ports.py` | 시리얼 포트 목록 확인 |
 | `02_ping_manual.py` | Ping/Ack — `check()` 를 직접 돌리는 방식 |
 | `03_ping_event.py` | Ping/Ack — 이벤트 핸들러 방식 (권장) |
@@ -37,6 +37,11 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `27_keyboard_takeoff_landing.py` | 키보드로 이륙 / 착륙 / 비상 정지 ⚠️이륙 |
 | `28_keyboard_move.py` | 키보드로 전후좌우·상하·회전 이동 ⚠️이륙 |
 | `29_keyboard_drone_gui.py` | [과제] 키보드 조종 + 상태·조종값 GUI ⚠️이륙 |
+| `30_flight_takeoff_hover_landing.py` | 자율 비행 기본형 — 이륙 / 호버링 / 착륙 ⚠️이륙 |
+| `31_flight_stop.py` | `sendLanding` vs `sendStop` — 하강 후 정지 ⚠️이륙 |
+| `32_position_move.py` | 거리 이동 — `sendControlPosition` / `16` ("ㄱ"자) ⚠️이륙 |
+| `33_position_return_home.py` | 리턴홈 — `sendFlightEvent(FlightEvent.Return)` ⚠️이륙 |
+| `34_pattern_square.py` | 패턴 비행 — 정사각형 (방향 이동 / heading 회전) ⚠️이륙 |
 
 ## 환경 구축
 
@@ -561,6 +566,112 @@ def tick(self):
 바닥 무늬의 움직임을 보고 위치를 유지하므로, 단색·유광·어두운 바닥에서는 못 읽는다.
 **무늬 있는 바닥, 넓은 곳.**
 
+## 자율 비행 — 거리와 패턴
+
+27~29 는 **사람이 키를 누르는 만큼** 움직였다. 30~34 는 명령을 코드에 순서대로 적어 두고
+손을 뗀다. 사람이 개입하지 않으니, 명령이 끝날 때까지 기다리는 일을 코드가 대신해야 한다.
+
+### 기다리는 방식이 명령마다 다르다
+
+| 함수 | 대기 | 비고 |
+|---|---|---|
+| `sendTakeOff()` / `sendLanding()` | 비블로킹 → 약 5초 | 보내고 바로 리턴한다 |
+| `sendStop()` | — | 모터 즉시 정지 |
+| `sendControlWhile(r, p, y, t, ms)` | **블로킹** | 내부가 `while` — 그 ms 동안 못 빠져나온다 |
+| `sendControlPosition(...)` / `16` | 비블로킹 → 이동 시간만큼 | 안 기다리면 다음 명령이 덮어쓴다 |
+| `sendFlightEvent(FlightEvent.Return)` | 비블로킹 → 복귀 시간만큼 | |
+
+    이동 대기 = 거리 ÷ 속도 + 여유 2~3초       1 m ÷ 0.5 m/s = 2초
+    회전 대기 = 회전각 ÷ 회전속도 + 여유        90° ÷ 45°/s   = 2초
+
+블로킹인 건 `sendControlWhile` 하나뿐이다. 강의 코드가 이 함수 뒤에 붙이는 `sleep(0.01)` 은
+없어도 그만이라 뺐다. 반대로 위치 명령 뒤의 대기는 **빠뜨리면 동작이 깨진다.**
+
+### 위치 명령 — "얼마나 갈지" 를 직접 쓴다
+
+```python
+sendControlPosition(positionX, positionY, positionZ, velocity, heading, rotationalVelocity)
+```
+
+| 인자 | 단위 | 범위(펌웨어) | 부호 |
+|---|---|---|---|
+| `positionX` | m | -10.0 ~ 10.0 | 앞 **+** / 뒤 **−** |
+| `positionY` | m | -10.0 ~ 10.0 | 좌 **+** / 우 **−** |
+| `positionZ` | m | -10.0 ~ 10.0 | 위 **+** / 아래 **−** |
+| `velocity` | m/s | 0.5 ~ 2.0 | |
+| `heading` | ° | -360 ~ 360 | 좌회전 **+** / 우회전 **−** |
+| `rotationalVelocity` | °/s | 10 ~ 360 | |
+
+**오른쪽과 우회전이 음수다.** 가장 많이 틀리는 부분이고, 틀려도 에러가 안 나서 그냥 반대로 간다.
+
+`sendControlPosition16` 은 같은 명령을 **×10 한 정수**로 보낸다 — `1 m = 10`, `0.5 m/s = 5`.
+20바이트(`<ffffhh`) 와 12바이트(`<hhhhhh`) 로 길이만 다르고 둘 다 `DataType.Control` 이다.
+(슬라이드의 "거리 100 이 1미터" 는 오탈자다. 실습 코드의 `sendControlPosition16(10, …)` = 1 m 가 맞다.)
+
+### int 규칙이 한 호출 안에서 갈린다
+
+| 함수 | float 허용 | int 전용 |
+|---|---|---|
+| `sendControl` | 없음 | 네 값 전부 |
+| `sendControlPosition` | `x` `y` `z` `velocity` | **`heading` `rotationalVelocity`** |
+| `sendControlPosition16` | 없음 | **여섯 개 전부** |
+
+```python
+dron.sendControlPosition(1.0, 0, 0, 0.5, -90.0, 45)   # heading 이 float → 조용히 무시
+dron.sendControlPosition16(10, 0, 0, 0.5, 0, 0)       # velocity 가 float → 조용히 무시
+```
+
+부저·LED·`sendControl` 과 같은 함정이다. `isinstance` 검사에 걸리면 **예외 없이 `None` 을
+반환하고 끝난다.** 드론은 가만히 있고 에러도 없으니 "명령이 안 먹네" 로만 보인다.
+
+### 범위를 넘겨도 에러가 안 난다
+
+`sendControl` 은 내부가 `pack('<bbbb')` 라 100 을 넘기면 `struct.error` 로 **터져서** 알려줬다.
+위치 명령은 int16(±32767) / float 이라 웬만한 값이 다 통과하고, 라이브러리에 범위 검사도 없다.
+위 표의 "-10.0 ~ 10.0" 은 펌웨어 쪽 제한이지 파이썬이 막아 주는 값이 아니다.
+
+> **단위를 잘못 쓰면 에러 대신 드론이 날아간다.** 위치 명령에서만큼은 "에러가 안 났으니
+> 맞게 보냈다" 가 성립하지 않는다. 값을 바꿀 때는 낮은 값부터 올려 가며 확인할 것.
+
+### 리턴홈 — `sendFlightEvent`
+
+```python
+from CodingDrone.protocol import FlightEvent
+dron.sendFlightEvent(FlightEvent.Return)   # 이륙 지점으로 복귀
+```
+
+사실 계속 쓰고 있던 함수다 — `sendTakeOff()` / `sendLanding()` 이 `FlightEvent.TakeOff`(0x11) /
+`Landing`(0x12) 을 감싼 래퍼이고, 래퍼가 없는 `Return`(0x18) · `Reverse` · `Flip*` · `ResetHeading`
+은 이 함수로 직접 보낸다. 인자는 **반드시 `FlightEvent` enum** 이다 — `0x18` 처럼 int 를 넣으면
+`isinstance` 검사에 걸려 조용히 무시된다.
+
+돌아오는 위치는 드론이 **스스로 추정한** 값이다. 하방 옵티컬 플로우가 바닥 무늬로 이동량을
+누적하므로 단색·유광 바닥에서는 수십 cm 어긋난다.
+
+### 패턴 비행 두 가지
+
+| | 방향 이동 (34 MODE 1) | heading 회전 (34 MODE 2) |
+|---|---|---|
+| 명령 | 전진·우·후진·좌 4가지 | **전진 + 우회전 2가지** |
+| 드론 앞쪽 | 계속 처음 방향 | 모서리마다 바뀜 |
+| 모습 | 옆·뒤로 미끄러진다 | 자동차처럼 코너링 |
+| 확장 | 임의의 경로 | 정다각형 — **회전각 = 360 ÷ 변의 수** |
+
+두 번째가 성립하는 이유는 **위치 이동이 바디 기준**이기 때문이다. "앞" 은 방의 고정된 방향이
+아니라 드론이 지금 바라보는 쪽이라, 회전한 뒤의 전진은 새 방향으로 나아간다.
+그래서 같은 명령 두 개만 반복해도 도형이 된다.
+
+방향 이동 쪽은 네 변의 합이 0 이라 리턴홈 없이도 출발점으로 돌아온다 — 이론상. 실제로는
+이동 오차가 누적되어 조금씩 어긋난다.
+
+### 중단하는 방법
+
+자율 비행은 시작하면 사람이 낄 자리가 없다. 빠져나오는 길은 하나뿐이다.
+
+- **대기 중 Ctrl+C** → `KeyboardInterrupt` → `finally` 의 `sendLanding()` 이 나간다.
+- **터미널 창을 그냥 닫으면 안 된다.** 파이썬만 죽고 드론은 마지막 명령을 유지한 채 계속 난다.
+- 그래도 안 되면 조종기 전원 버튼으로 직접 착륙시키거나, 몸체를 잡아 뒤집는다(뒤집히면 모터가 꺼진다).
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -608,6 +719,16 @@ def tick(self):
 | 창을 벗어났더니 드론이 계속 이동 | 포커스를 잃으면 `KeyRelease` 를 못 받아 키가 눌린 채로 남음 | `<FocusOut>` 에서 집합 비우기 |
 | `sudo python` 이 `ModuleNotFoundError` | sudo 가 환경변수를 갈아엎어 venv 가 풀림 | `sudo .venv/bin/python ...` |
 | 대각선 이동이 안 됨 | `elif` 체인은 키 하나만 처리 | 축별로 모아 `sendControl` 한 번 |
+| `sendControlPosition` 이 아무 반응 없음 | `heading`/`rotationalVelocity` 에 float — 앞 네 개는 float 이 되는데 이 둘만 int 전용 | 정수로 (`-90.0` → `-90`) |
+| `sendControlPosition16` 이 아무 반응 없음 | 여섯 값 중 하나가 float (`velocity=0.5` 등) | 전부 ×10 한 정수로 (`0.5 m/s` → `5`) |
+| 1 m 만 가라고 했는데 10 m 를 감 | 슬라이드의 "거리 100 이 1미터" 오탈자 | `1 m = 10`. 위치 명령은 **범위 검사가 없어 에러도 안 난다** |
+| 오른쪽으로 가라니 왼쪽으로 감 | `positionY` 는 좌 + / 우 − | 오른쪽은 음수. `heading` 도 우회전이 음수 |
+| 이동 도중에 착륙해 버림 | 위치 명령은 비블로킹인데 대기를 안 줌 | 거리 ÷ 속도 + 여유 2~3초 |
+| 두 이동이 겹쳐 대각선으로 감 | 앞 명령이 끝나기 전에 다음 명령이 덮어씀 | 위와 같음 |
+| `sendFlightEvent(0x18)` 이 무반응 | int 를 넘김 — `isinstance(FlightEvent)` 검사에 걸림 | `FlightEvent.Return` |
+| 사각형이 출발점에서 어긋남 | 네 변의 이동 오차가 누적 | 마지막에 리턴홈을 한 번 넣는다 |
+| 바닥에 닿았는데 모터가 계속 돔 | `sendControlWhile` 하강이 남은 시간 동안 계속 전송 | 낮은 고도면 시간을 줄이거나 하방 센서로 판단(23) |
+| Ctrl+C 대신 창을 닫았더니 계속 낢 | 파이썬만 죽고 드론은 마지막 명령을 유지 | Ctrl+C 로 빠져나와 `finally` 의 착륙을 태운다 |
 
 ## 주요 상수
 
@@ -641,9 +762,13 @@ dron.sendStop()
 
 넓은 실내 공간, 프로펠러 가드 장착은 기본.
 
-**실제로 이륙하는 파일은 `23` `24` `27` `28` `29` 다섯 개다.**
+**실제로 이륙하는 파일은 `23` `24` `27`~`34` 열 개다.**
 (`21_sensor_altitude.py` 는 `TAKEOFF = True` 로 바꿨을 때만.) 나머지는 전부 책상 위에서 돌아간다.
-`23`/`24` 는 이륙 전 3초 카운트다운을 찍고, `27`~`29` 는 `1` 키를 눌러야 뜬다.
-다섯 개 모두 `Ctrl+C` 나 창 닫기로 중단해도 착륙 명령이 나간다.
+`23`/`24` 는 이륙 전 3초 카운트다운을 찍고, `27`~`29` 는 `1` 키를 눌러야 뜨며,
+`30`~`34` 는 **실행하는 순간 바로 이륙한다** — 자율 비행이라 시작 신호가 따로 없다.
+열 개 모두 `Ctrl+C` 로 중단하면 `finally` 의 착륙 명령이 나간다.
+창을 그냥 닫으면 파이썬만 죽고 드론은 마지막 명령을 유지하므로 반드시 `Ctrl+C` 로 끝낼 것.
 `29` 는 `SIMULATION = True` 로 두면 드론 없이 화면·키 동작만 확인할 수 있다.
+`30`~`34` 는 이동 거리·속도를 상수로 빼 뒀다 — 좁은 곳에서는 `DIST_M`/`SIDE_M` 을 0.5 로 줄인다.
+한 변 1 m 짜리 패턴 비행(`34`)은 최소 2 m × 2 m 가 비어 있어야 한다.
 손은 프로펠러에 닿지 않게 **아래쪽 / 정면에서 천천히** 넣을 것.
