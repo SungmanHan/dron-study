@@ -28,6 +28,11 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `18_light_mode.py` | LED 모드 제어 — `sendLightMode*` / `sendLightEvent*` |
 | `19_light_random_dimming.py` | 랜덤 색 디밍 — RGB / `Colors` 팔레트 / 드론 |
 | `20_drone_light_random_dimming_20.py` | [과제] 드론 LED 랜덤 디밍 20회 + 실행 로그 |
+| `21_sensor_altitude.py` | 센서 읽기 — 고도 `Altitude` |
+| `22_sensor_motion_attitude.py` | 센서 읽기 — 모션 `Motion` / 자세 `Attitude` |
+| `23_sensor_bottom_landing.py` | 센서로 제어 — 하방 거리로 자동 착륙 ⚠️이륙 |
+| `24_sensor_front_landing.py` | 센서로 제어 — 전방 거리로 자동 착륙 ⚠️이륙 |
+| `25_sensor_gui.py` | [과제] 하방/전방 센서값 Tkinter 실시간 출력 |
 
 ## 환경 구축
 
@@ -371,6 +376,67 @@ Colors(random.randint(0, Colors.EndOfType.value - 1))   # 실제 색은 0 ~ 140
 스크립트가 끝나도 드론·조종기는 마지막 패턴을 계속 유지한다.
 `finally` 에서 `sendLightManual(deviceType, 0xFF, 0)` 으로 소등한다.
 
+## 센서 — 요청하고, 응답은 핸들러로 받는다
+
+지금까지(부저·LED·LCD)는 **보내기만** 했다. 센서는 처음으로 **받는** 쪽이다.
+
+```python
+dron.setEventHandler(DataType.Altitude, event_altitude)   # ① 등록 (1회면 충분)
+dron.sendRequest(DeviceType.Drone, DataType.Altitude)     # ② 요청 (반복)
+def event_altitude(altitude): ...                         # ③ 응답이 오면 자동 호출
+```
+
+`sendRequest()` 의 반환값은 센서값이 아니다. LED 때와 같이 **방금 보낸 프레임**이고,
+드론의 응답은 백그라운드 수신 스레드가 받아 핸들러로 넘긴다.
+그래서 `Drone()` 이어야 한다 — `Drone(False)` 면 요청은 나가지만 핸들러가 영영 안 불린다.
+
+| DataType | 클래스 | 필드 | 형식 |
+|---|---|---|---|
+| `Altitude`(0x43) | Altitude | `temperature` `pressure` `altitude` `rangeHeight` | **Float32** |
+| `Motion`(0x44) | Motion | `accelX/Y/Z` `gyroRoll/Pitch/Yaw` `angleRoll/Pitch/Yaw` | Int16 |
+| `Attitude`(0x41) | Attitude | `roll` `pitch` `yaw` | Int16 |
+| `Range`(0x45) | Range | `left` `front` `right` `rear` `top` `bottom` | Int16, **mm** |
+
+### 헷갈리는 짝들
+
+- **`Altitude`(고도) ≠ `Attitude`(자세)** — 철자 한 글자 차이. 강의 자료에서도 주석이 섞여 있었다.
+- **`altitude` ≠ `rangeHeight`** — 같은 Altitude 안의 다른 값이다.
+  `altitude` 는 기압 기반 **해발고도**라 실내에서도 수십 m 로 나오고 흔들린다.
+  "바닥에서 얼마나 떠 있나" 는 하방 거리센서값인 `rangeHeight`.
+- **`gyro*` ≠ `angle*`** — `gyro` 는 **각속도**(도는 동안만 튀고 멈추면 0),
+  `angle` 은 **각도**(기울인 채 멈춰도 그 값을 유지). 이 차이를 눈으로 보는 게 모션 예제의 목적이다.
+- **`accel*` 은 ×10 된 정수** — 수평으로 두면 `accelZ` 가 약 98(= 9.8m/s², 중력).
+- **단위가 예제마다 다르다** — 하방 `rangeHeight` 는 **m**(0.3 = 30cm),
+  전방 `front` 는 **mm**(200~400 = 20~40cm). 숫자 크기가 1000배 차이 나는 이유.
+  같은 하방 거리를 `Range.bottom`(mm) 으로도 볼 수 있다.
+- `Attitude`/`Range` 는 Int16 이라 `{:.3f}` 로 찍으면 항상 `.000`. Float32 인 `Altitude` 만 소수가 보인다.
+
+### 핸들러에서 전역 변수를 바꾸려면 `global`
+
+"센서값으로 판단해서 명령" 을 하려면 핸들러가 바깥 상태를 바꿔야 하는데, 여기서 걸린다.
+
+```python
+def event_altitude(altitude):
+    if altitude.rangeHeight < 0.3:
+        isDetected = True      # ← 대입이 있으면 파이썬은 이 이름을 지역 변수로 본다
+    if isDetected:             # ← 평상시(대입이 안 된 경로)엔 여기서 터진다
+        ...
+# UnboundLocalError: cannot access local variable 'isDetected' ...
+```
+
+조건이 맞을 때는 대입이 먼저 일어나 **우연히 동작하므로**, "착륙은 되는데 평소엔 계속 에러가
+찍히는" 상태가 된다. 전역 플래그는 끝까지 False 다. 해결은 함수 첫 줄 `global isDetected`.
+
+### 그 밖에 정리한 것
+
+- **핸들러 등록은 루프 밖 1회** — 강의 예제는 `while` 안에서 매번 재등록한다(무해하지만 의미 없다).
+- **감지되면 `break`** — 안 그러면 착륙한 뒤에도 요청과 착륙 명령을 계속 보낸다.
+- **`Ctrl+C` 에도 착륙** — 강의 화면 버전 하나는 착륙 없이 "측정 종료" 만 찍고 **호버링을 계속**한다.
+- **`close()`** — 강의 예제에 없어서 다음 실행 때 포트가 물린다.
+- **핸들러 매개변수 이름 `range`** — 내장 함수 `range()` 를 가린다. `range_data` 로.
+- **`open()` 은 실패해도 예외를 던지지 않고 `False` 를 반환한다.** GUI 처럼 창만 먼저 뜨는 구조에서는
+  "측정 중..." 만 계속 찍히고 값이 안 들어오는 상태가 된다 → 반환값을 확인할 것.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -403,6 +469,11 @@ Colors(random.randint(0, Colors.EndOfType.value - 1))   # 실제 색은 0 ~ 140
 | 랜덤 색에 이상한 값이 섞임 | `randint(0, Colors.EndOfType.value)` — 상한 포함이라 경계값이 뽑힘 | `- 1` 을 해서 0~140 |
 | 스크립트가 끝나도 LED 가 계속 켜져 있음 | Mode 계열은 끌 때까지 유지 | `finally` 에서 `sendLightManual(..., 0xFF, 0)` |
 | `open()` 을 인자 없이 호출 | 포트 목록의 **마지막 것**을 고른다 — 드론 동글이라는 보장이 없다 | `drone_util.find_port()` |
+| `UnboundLocalError: isDetected` | 핸들러에서 전역에 대입 — `global` 누락. 조건이 맞는 경로만 우연히 동작 | 함수 첫 줄에 `global` |
+| 센서 핸들러가 안 불림 | `Drone(False)` — 요청은 나가지만 수신 스레드가 없다 | `Drone()` |
+| 창은 뜨는데 센서값이 안 들어옴 | `open()` 이 실패해도 예외 없이 `False` 를 반환 | 반환값 확인 후 안내 |
+| Tkinter 창이 멈추거나 이상하게 갱신됨 | 핸들러(수신 스레드)에서 위젯을 직접 건드림 / 메인 스레드 `sleep` | 값만 저장하고 `root.after` 로 갱신 |
+| 값이 안 잡히거나 즉시 착륙 | 단위 혼동 — 하방 `rangeHeight` 는 m, 전방 `front` 는 mm | 1000배 차이를 확인 |
 
 ## 주요 상수
 
@@ -411,7 +482,7 @@ Colors(random.randint(0, Colors.EndOfType.value - 1))   # 실제 색은 0 ~ 140
 - **`FlightEvent`** — `TakeOff` `Landing` `Stop` `FlipFront/Rear/Left/Right` `ResetHeading`
 - **`ModeControlFlight`** — 보통 `Attitude`(자세 제어). `Position` 은 위치 센서 필요
 - **`DataType`** — `State`(0x40) 배터리·비행상태, `Attitude`(0x41) 기울기,
-  `Altitude`(0x43) 고도, `Range`(0x45) 거리센서
+  `Altitude`(0x43) 고도, `Motion`(0x44) 가속도·자이로·각도, `Range`(0x45) 거리센서
 - **`DeviceType`** — `Drone`(0x10) `Controller`(0x20) `Base`(0x70)
 - **`BuzzerMode`** — `Mute` `Scale` `Hz` + 각각의 `Reserve`, `Stop`
 - **`BuzzerScale`** — `C1`~`B8`, 샵은 `CS4` 형태. `Mute`(0xEE) `Fin`(0xFF) 은 특수값
@@ -434,3 +505,8 @@ dron.sendStop()
 ```
 
 넓은 실내 공간, 프로펠러 가드 장착은 기본.
+
+**실제로 이륙하는 파일은 `23_sensor_bottom_landing.py` 와 `24_sensor_front_landing.py` 둘뿐이다.**
+(`21_sensor_altitude.py` 는 `TAKEOFF = True` 로 바꿨을 때만.) 나머지는 전부 책상 위에서 돌아간다.
+두 파일 모두 이륙 전 3초 카운트다운을 찍고, `Ctrl+C` 로 중단해도 착륙 명령이 나간다.
+손은 프로펠러에 닿지 않게 **아래쪽 / 정면에서 천천히** 넣을 것.
