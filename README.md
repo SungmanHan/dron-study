@@ -52,6 +52,13 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `42_opencv_template_match.py` | 템플릿 매칭 — 여러 사진 중 원하는 것 찾기 |
 | `43_opencv_hsv.py` | HSV 색공간 — 색을 H 하나로 고르기 (숫자만) |
 | `44_assignment_color_extract.py` | [과제] 색상표에서 특정 색 추출 — `inRange` + `bitwise_and` |
+| `45_video_source.py` | 영상 입력 — `VideoCapture` (카메라 / 동영상 / 합성 영상) 📷 |
+| `46_draw_shapes_text.py` | 도형·텍스트 그리기 — 선 · 원 · 사각형 · 글꼴 5종 |
+| `47_video_record.py` | 영상 저장 — `VideoWriter` 와 조용히 실패하는 세 자리 |
+| `48_face_detect.py` | 얼굴 인식 — Haar Cascade (`CascadeClassifier`) 📷 |
+| `49_assignment_face_eye_lip.py` | [과제] 얼굴·눈·입 인식 + 이름표 + `r` 녹화 📷 |
+
+⚠️이륙 = 드론이 실제로 뜬다 / 📷 = 카메라를 쓴다(`45` 는 `SOURCE = "demo"` 로 카메라 없이도 돌아간다)
 
 ## 환경 구축
 
@@ -807,7 +814,8 @@ python -c "import cv2; print(cv2.__version__)"
 
 - `numpy` 는 CodingDrone 이 의존성으로 이미 깔아 둔다. 영상이 곧 숫자 행렬이라 필요한 것.
 - **설치 이름은 `opencv-python`, import 이름은 `cv2`** 다. `import opencv` 는 없다.
-- 확인한 버전은 **5.0.0** (슬라이드의 `4.4.0` 은 촬영 당시 값이다. 달라도 정상).
+- 버전은 달라도 정상이다(슬라이드는 촬영 당시의 `4.4.0`). 이 저장소는 21~22 강을 **5.0.0** 으로 확인했고,
+  **23 강부터는 4.10.0.84 로 내렸다** — 얼굴 인식(`CascadeClassifier`)이 5.0 에서 빠졌기 때문이다(아래 23 강 절).
 - `opencv-python-headless` 가 깔리면 `imshow` 가 안 된다. `39` 가 GUI 백엔드를 찍어 준다
   (맥은 `COCOA`, headless 는 `NONE`).
 
@@ -973,6 +981,117 @@ mask  = cv.bitwise_or(mask1, mask2)
 > 슬라이드 주석 오류: `height, width = img_color.shape[:2]` 옆의 `가로 [0], 세로[1]` 은 반대다.
 > `shape[0]` 이 높이(세로), `shape[1]` 이 너비(가로)다. 변수 이름 순서가 맞다.
 
+## 영상과 얼굴 인식 — 카메라가 붙는다
+
+23 강. 드론은 아직 안 쓰지만 카메라가 등장한다. (`45`~`49`)
+맥은 **시스템 환경설정 → 보안 및 개인 정보 보호 → 카메라** 에서 터미널(또는 VS Code)을 허용해야 한다.
+허용 전에는 `isOpened()` 가 False 이거나 검은 화면만 나온다.
+
+### ⚠️ 얼굴 인식은 OpenCV 4.x 에서만 된다
+
+`cv.CascadeClassifier` 와 학습된 xml 이 **5.0 에서 통째로 빠졌다.** 캐시에 남아 있던
+5.0.0.93 휠을 직접 열어 확인한 결과:
+
+| | OpenCV 5.0.0.93 | OpenCV 4.10.0.84 |
+|---|---|---|
+| `cv2/data/` 안의 xml | **0개** (`__init__.py` 하나뿐) | **17개** |
+| `.so` 안의 `CascadeClassifier` | **0건** | 있음 |
+
+```bash
+pip install --only-binary=:all: "opencv-python<5"
+```
+
+`--only-binary=:all:` 은 소스 컴파일로 새는 것을 막는다. 이 맥(macOS 12 Intel / Python 3.12)에
+pip 가 주는 최신 바이너리는 **4.10.0.84** 이고, 그냥 `pip install opencv-python` 하면
+5.0 을 소스에서 빌드하려 든다.
+
+### 영상 한 프레임을 다루는 골격
+
+```python
+cap = cv.VideoCapture(0)          # 정수 = 카메라, 문자열 = 동영상 파일
+while True:
+    ret, frame = cap.read()
+    if not ret:                   # 강의 예제1 에 빠져 있는 줄
+        break                     # 카메라가 끊겼거나 파일이 끝났다. frame 은 None
+    ...
+    cv.imshow("frame", frame)
+    if cv.waitKey(30) & 0xFF == 27:   # ESC
+        break
+cap.release()                     # 안 하면 카메라가 잡힌 채로 남는다
+```
+
+- **`set()` 은 요청일 뿐이다.** 적용된 값은 `get()` 으로 확인한다. 동영상 파일에 쓰면 아예 무시된다 —
+  320x240 파일에 640x480 을 요청해도 그대로 320x240 이었다. `cap.set(3, …)` 의 3·4·5 는
+  `FRAME_WIDTH`·`FRAME_HEIGHT`·`FPS`.
+- **슬라이드 주석 오류**: `cv.flip(frame, 1)` 옆이 "상하반전" 인데 **좌우 반전**이다(상하는 `0`).
+- `45` 는 `SOURCE = "demo"` 로 두면 합성 영상을 만들어 읽으므로 **카메라 없이** 전 과정을 확인할 수 있다.
+
+### 좌표 순서가 두 가지다
+
+| | 순서 | 예 |
+|---|---|---|
+| numpy 슬라이싱 | **세로, 가로** | `img[100:200, 200:300]` |
+| 그리기 함수 | **가로, 세로** | `cv.rectangle(img, (x, y), …)` |
+| 배열 만들기 | 높이, 너비, 채널 | `np.zeros((480, 640, 3), np.uint8)` |
+| 카메라 설정 | 너비, 높이 | `cap.set(…WIDTH, 640)` |
+
+두께에 `-1`(`cv.FILLED`)을 주면 속이 찬다. 사각형의 두 점은 마주보는 꼭짓점이기만 하면 되고,
+`putText` 의 좌표는 글자의 **왼쪽 아래**다. `FONT_ITALIC` 은 단독 글꼴이 아니라 `|` 로 조합한다.
+**Hershey 글꼴에는 한글이 없다** — `???` 로 나온다.
+그리기 함수는 새 이미지를 주는 게 아니라 넘긴 배열을 직접 고친다.
+
+### 영상 저장 — 조용히 실패하는 세 자리
+
+| 실수 | 증상 (직접 확인한 값) |
+|---|---|
+| `fps` 에 0 을 넘김 (맥 카메라가 0 을 돌려줌) | `isOpened()` **False**, 이후 `write()` 는 무반응 |
+| 저장 크기 ≠ 프레임 크기 | 에러 없이 **257 바이트 / 0 프레임** |
+| `release()` 누락 | **44 바이트**, 다시 열면 `moov atom not found` |
+
+정상 저장본은 27KB / 30 프레임 / fps 20 / 320x240 으로 읽혔다. 강의 예제4 슬라이드에는
+`out.release()` 가 아예 빠져 있다. 크기는 카메라에서 읽은 값을 그대로 쓰고, `try/finally` 로 닫는다.
+코덱은 이 맥에서 `mp4v` `DIVX` `XVID` `avc1` `MJPG` 다섯 다 열렸다 —
+QuickTime 이 avi 를 못 여니 `mp4v` + `.mp4` 가 편하다.
+
+### 얼굴 인식 — 분류기도 조용히 실패한다
+
+```python
+face = cv.CascadeClassifier(cv.data.haarcascades + 'haarcascade_frontalface_default.xml')
+if face.empty():      # 경로가 틀려도 예외가 안 난다. imread 가 None 을 주던 것과 같은 종류
+    ...
+faces = face.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
+```
+
+입력은 **흑백**이다(밝기 차이로 특징을 찾는다). xml 파일만 바꾸면 눈·상체·고양이 얼굴이 된다.
+
+**파라미터는 `minSize` 가 더 결정적이다.** 얼굴 두 개(47x47, 58x58)가 있는 사진으로 재 보면:
+
+| 조건 | 결과 |
+|---|---|
+| `minNeighbors` 3 / 5 / 6 | 전부 2개 (차이 없음) |
+| `minSize` (30,30) / (50,50) | 2개 |
+| `minSize` (80,80) | **0개** |
+
+과제 코드의 `minSize=(80, 80)` 은 웹캠 앞 얼굴(150~250 픽셀) 기준이라, 조금만 멀어지면 통째로 놓친다.
+
+눈은 **얼굴을 먼저 찾고 그 안에서만** 찾는다. 화면 전체에서 찾으면 콧구멍·입꼬리까지 눈으로 잡는다.
+잘라낸 영역(ROI)은 원본 배열의 창문이라 `roi_color` 에 그리면 `frame` 에도 그려진다 —
+좌표를 더할 필요가 없다. 단 얼굴이 충분히 커야 한다. 위 사진의 47~58 픽셀 얼굴에서는
+눈도 입도 하나도 잡히지 않았다(선글라스 탓도 있다).
+
+**박스가 그려졌다고 거기에 얼굴이 있는 건 아니다.** 같은 사진에 `haarcascade_profileface` 를
+돌렸더니 사람이 아닌 바닥 쪽에 하나가 잡혔고, 2배로 확대하니 같은 얼굴에 박스가 겹쳐 잡혔다.
+
+### 과제에서 손본 것
+
+- **`eyes[:2]` 는 "가장 그럴듯한 둘" 이 아니다.** `detectMultiScale` 결과는 신뢰도 순이 아니라
+  훑은 순서(위→아래, 왼→오)다. 앞의 둘이 눈썹일 수 있다 → 넓이 순으로 큰 둘.
+- 창의 **X 버튼으로 닫으면 루프가 안 끝난다**(키만 보고 있어서) → `getWindowProperty` 도 함께 본다.
+- 녹화 fps 를 **시작 직후의 측정값**으로 잡으면 이동평균이 덜 올라와 영상이 느리게 재생된다
+  → 몇 프레임 지난 뒤의 값만 쓰고, 아니면 카메라 fps 로.
+- `● REC` 표시는 `write()` 뒤에 그리므로 **녹화본에는 안 남는다**(화면에만). 과제 주석은 반대로 읽힌다.
+- 분류기 로드를 `main()` 안으로 옮겼다. 최상단에 두면 **import 만 해도** 죽는다.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -1056,6 +1175,18 @@ mask  = cv.bitwise_or(mask1, mask2)
 | 학습자료 이미지로 드론을 못 찾음 | 개별 png 가 전체 사진의 잘라낸 조각이 아니다(크기·각도가 다름) | 크기 탐색으로 일부만 찾힘. 각도가 다르면 그래도 실패 |
 | `cv.error: ... template` | 템플릿이 장면보다 큼 | 점수 배열 크기가 `장면 - 템플릿 + 1` 이라 성립 불가. 템플릿을 줄인다 |
 | 매칭 점수는 높은데 위치가 틀림 | 무늬 없는 단색 배경 — 어디에 대도 똑같이 맞는다 | 실제 사진처럼 무늬가 있어야 한다(`42` 가 얼룩을 입히는 이유) |
+| `AttributeError: module 'cv2' has no attribute 'CascadeClassifier'` | OpenCV 5.0 에는 분류기도 xml 도 없다 | `pip install --only-binary=:all: "opencv-python<5"` |
+| `imshow` 에서 이상한 에러 | 카메라 권한이 없어 `frame` 이 `None` | `ret` 을 먼저 확인 — `if not ret: break` |
+| 다음 실행에서 카메라가 안 열림 | 앞 실행이 `release()` 없이 죽어 장치를 물고 있다 | `try/finally` 로 `cap.release()` |
+| 저장한 영상이 재생이 안 됨 (44 바이트) | `writer.release()` 누락 — 파일 끝 정보가 안 써진다 | `finally` 에서 release |
+| 저장 파일이 257 바이트에 0 프레임 | 저장 크기와 프레임 크기가 다름 | 크기는 카메라에서 읽은 값으로. 에러가 안 난다 |
+| `VideoWriter` 가 안 열림 | 맥 카메라가 `CAP_PROP_FPS` 를 0 으로 돌려줌 | 0 이면 30 같은 기본값으로 대체 |
+| 녹화 영상이 빨리 감기처럼 재생됨 | 실제 처리 속도보다 높은 fps 로 저장 | 측정한 FPS 를 저장 fps 로 |
+| 해상도를 640x480 으로 바꿨는데 그대로 | `set()` 은 요청일 뿐, 파일 소스에는 무시된다 | `get()` 으로 실제 값 확인 |
+| 얼굴이 하나도 안 잡힘 | `minSize` 가 화면 속 얼굴보다 큼 | 먼저 `minSize` 를 낮춘다(실측: 80→0개, 50→2개) |
+| 눈이 엉뚱한 곳에 잡힘 | 화면 전체에서 눈을 찾음 | 얼굴을 먼저 찾고 그 안(위쪽 절반)에서만 |
+| 창을 X 로 닫았는데 프로그램이 안 끝남 | 키 입력만 확인하는 루프 | `getWindowProperty(...) < 1` 도 같이 검사 |
+| `q` 를 눌러도 종료가 안 됨 | 한글 입력 상태라 `ㅂ` 이 들어감 | 영문 상태에서, 영상 창에 포커스를 준 뒤 |
 
 ## 주요 상수
 
