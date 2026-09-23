@@ -33,6 +33,10 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `23_sensor_bottom_landing.py` | 센서로 제어 — 하방 거리로 자동 착륙 ⚠️이륙 |
 | `24_sensor_front_landing.py` | 센서로 제어 — 전방 거리로 자동 착륙 ⚠️이륙 |
 | `25_sensor_gui.py` | [과제] 하방/전방 센서값 Tkinter 실시간 출력 |
+| `26_keyboard_input.py` | 키보드 입력 — `keyboard` 모듈 네 가지 방식 |
+| `27_keyboard_takeoff_landing.py` | 키보드로 이륙 / 착륙 / 비상 정지 ⚠️이륙 |
+| `28_keyboard_move.py` | 키보드로 전후좌우·상하·회전 이동 ⚠️이륙 |
+| `29_keyboard_drone_gui.py` | [과제] 키보드 조종 + 상태·조종값 GUI ⚠️이륙 |
 
 ## 환경 구축
 
@@ -437,6 +441,126 @@ def event_altitude(altitude):
 - **`open()` 은 실패해도 예외를 던지지 않고 `False` 를 반환한다.** GUI 처럼 창만 먼저 뜨는 구조에서는
   "측정 중..." 만 계속 찍히고 값이 안 들어오는 상태가 된다 → 반환값을 확인할 것.
 
+## 비행 명령 — 키보드로 조종
+
+센서(21~25)까지는 드론이 **가만히 있었다.** 여기서부터 실제로 난다.
+
+### 명령은 네 개뿐이다
+
+| 함수 | 내부 | 동작 |
+|---|---|---|
+| `sendTakeOff()` | `CommandType.FlightEvent` + `FlightEvent.TakeOff` | 이륙 |
+| `sendLanding()` | `CommandType.FlightEvent` + `FlightEvent.Landing` | 착륙 (천천히 내려온다) |
+| `sendStop()` | `CommandType.Stop` | **모터 즉시 정지** — 공중이면 추락 |
+| `sendControl(roll, pitch, yaw, throttle)` | `DataType.Control` | 4축 이동, 1회 전송 |
+
+`sendStop` 만 FlightEvent 가 아니라 별도 커맨드다. "비상 = Stop" 으로 외우면 위험하다 —
+공중에서 필요한 건 보통 `sendLanding()` 쪽이다.
+`sendFlightEvent(FlightEvent.X)` 를 쓰면 `FlipFront/Rear/Left/Right`, `Return`, `ResetHeading`
+같은 나머지 이벤트도 보낼 수 있다.
+
+### 축과 부호
+
+| 축 | − | + |
+|---|---|---|
+| `roll` | 좌이동 | 우이동 |
+| `pitch` | 후진 | 전진 |
+| `yaw` | 좌회전 | 우회전 |
+| `throttle` | 하강 | 상승 |
+
+**+ 방향 = 우 / 전진 / 우회전 / 상승.** 범위는 -100 ~ 100.
+
+### 네 값은 반드시 int
+
+```python
+dron.sendControl(0, 0, 0, POWER / 3)   # float → 조용히 무시된다
+```
+
+`isinstance(int)` 검사에 걸려 **예외 없이 `None` 을 반환**하고 끝난다(부저·LED 와 같은 함정).
+나눗셈 `/` 는 항상 float 이므로 `int()` 로 감쌀 것.
+반대로 범위를 벗어난 값은 조용하지 않다 — 내부가 `pack('<bbbb')` 라
+`struct.error: 'b' format requires -128 <= number <= 127` 로 터진다.
+
+### `sendControl` 은 1회, `sendControlWhile` 은 블로킹
+
+```python
+dron.sendControlWhile(0, 0, 0, 0, 4000)   # 4초간 제자리
+```
+
+라이브러리 내부는 그냥 `while` 루프다 — 4초 동안 `sendControl` 을 20ms 간격(초당 50회)으로
+반복 전송한다. **그동안 함수에서 못 빠져나온다.** 이륙 직후 자세를 잡는 데는 맞지만,
+이 4초 안에 누른 키는 전부 무시되고 GUI 라면 창까지 같이 멈춘다.
+그래서 29 에서는 이 함수를 쓰지 않고 "이륙 후 4초 동안 매 주기 `(0,0,0,0)` 을 보내는 상태" 로 바꿨다.
+
+### 키를 떼면 0 을 보내야 한다
+
+드론은 **마지막으로 받은 명령을 계속 유지한다.** 파이썬이 죽어도, 셀을 멈춰도 그대로 난다.
+
+```python
+else:
+    dron.sendControl(0, 0, 0, 0)   # 이 한 줄이 "누르는 동안만 이동" 을 만든다
+```
+
+같은 이유로 조종 루프는 `try/finally` 로 감싸고 `finally` 에서 `sendLanding()` → `close()` 를 한다.
+
+### 키 입력 세 가지 방식
+
+| 방식 | 함수 | 블로킹 | 드론 조종에서 |
+|---|---|---|---|
+| 폴링 | `is_pressed("w")` | X | **기본.** 루프에서 여러 키를 동시에 확인 |
+| 대기 | `read_key()` | O | 키 이름 확인용. 루프가 멈춰서 조종에는 못 쓴다 |
+| 이벤트 | `on_press` / `on_release` | X | 누를 때 시작 / 뗄 때 정지, 이륙·착륙 같은 단발 명령 |
+
+`read_key()` 는 누를 때와 뗄 때 각각 이벤트가 생겨 **한 번 눌러도 두 번** 반환된다.
+`on_press` 의 콜백이 받는 건 문자열이 아니라 `KeyboardEvent` 객체다 (`event.name` / `event.event_type`).
+
+### macOS 에서 `keyboard` 는 sudo 가 필요하다
+
+이 모듈은 터미널이 포커스가 아니어도 키를 읽는다 = **전역 키 후킹**이라 권한이 필요하다.
+
+```bash
+pip install keyboard
+sudo .venv/bin/python 28_keyboard_move.py
+```
+
+`sudo python` 이 아니라 **venv 안의 파이썬을 경로로 직접** 지정해야 한다. `sudo` 가 환경변수를
+갈아엎어 venv 활성화가 풀리고, 시스템 파이썬에는 keyboard 가 없어 `ModuleNotFoundError` 가 난다.
+시스템 설정 → 개인정보 보호 및 보안 → **입력 모니터링** 에 터미널 허용도 필요하다.
+
+과제(29)가 Tkinter 키 이벤트(`<KeyPress>` / `<KeyRelease>`)를 기본으로 쓰는 이유가 이것이다.
+창이 포커스인 동안의 키만 받으면 충분하고, 그건 전역 후킹이 아니라 권한이 필요 없다.
+대신 **창이 포커스를 잃으면 `KeyRelease` 를 못 받아** 키가 눌린 채로 남는다 →
+`<FocusOut>` 에서 눌린 키 집합을 비워야 한다.
+
+### GUI 조종 — `while True` 를 버린다
+
+Tkinter 는 `mainloop()` 이 돌아야 화면이 갱신된다. 28 처럼 무한 루프를 돌리면 창이 얼어붙는다.
+
+```python
+def tick(self):
+    now_keys = self.keys.get_pressed()
+    new_keys = now_keys - self.prev_keys   # 이번 주기에 새로 눌린 키만
+    self.prev_keys = now_keys
+    ...
+    self.root.after(TICK_MS, self.tick)    # 20ms 뒤 다시
+```
+
+- **단발 명령은 `new_keys` 로** — 이륙·착륙·비상정지를 매 주기 보내면 20ms 마다 명령이 쏟아진다.
+- **20ms 는 임의의 수가 아니다** — 라이브러리의 `sendControlWhile` 이 쓰는 간격과 같다(초당 50회).
+- **동시 입력** — `elif` 체인(28) 은 키 하나만 처리해서 대각선이 안 된다.
+  축별로 값을 모아 `sendControl` 을 **한 번** 호출하면 `↑`+`→` 가 같이 나간다.
+
+### 멈추는 방법은 세 단계다
+
+1. **비상 키** — `space` 를 **가장 먼저** 검사한다. `if/elif` 체인은 위에서 처음 걸린 것만
+   처리하므로, 비상 키가 아래에 있으면 다른 키가 눌린 동안 영영 검사되지 않는다.
+2. **조종기 모드 전환** — 조종기 전원 버튼을 한 번 눌러 조종기로 직접 착륙시킨다.
+3. **뒤집기** — 드론은 뒤집히면 모터가 꺼진다. 프로펠러 말고 몸체를 잡을 것.
+
+호버링이 안 되고 한쪽으로 흐른다면 바닥 탓이다. 하단 옵티컬 플로우 센서가
+바닥 무늬의 움직임을 보고 위치를 유지하므로, 단색·유광·어두운 바닥에서는 못 읽는다.
+**무늬 있는 바닥, 넓은 곳.**
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -474,12 +598,23 @@ def event_altitude(altitude):
 | 창은 뜨는데 센서값이 안 들어옴 | `open()` 이 실패해도 예외 없이 `False` 를 반환 | 반환값 확인 후 안내 |
 | Tkinter 창이 멈추거나 이상하게 갱신됨 | 핸들러(수신 스레드)에서 위젯을 직접 건드림 / 메인 스레드 `sleep` | 값만 저장하고 `root.after` 로 갱신 |
 | 값이 안 잡히거나 즉시 착륙 | 단위 혼동 — 하방 `rangeHeight` 는 m, 전방 `front` 는 mm | 1000배 차이를 확인 |
+| `sendControl` 이 아무 반응 없음 | 네 값 중 하나가 float — `isinstance(int)` 검사 후 조용히 `None` 반환 | `int()` 로 감싼다 |
+| `struct.error: 'b' format requires -128 <= number <= 127` | 세기를 100 넘게 줌 — 내부가 signed 1바이트 | -100 ~ 100 |
+| 키를 뗐는데 계속 날아감 | 드론은 마지막 명령을 유지한다 | `else: sendControl(0,0,0,0)` |
+| 이륙 후 4초간 키가 안 먹음 | `sendControlWhile` 이 그 시간 동안 블로킹 | 상태로 바꿔 매 주기 0 전송 |
+| 키를 안 눌러도 CPU 100% | 폴링 루프에 쉼이 없음 | `sleep(0.01)` |
+| Tk 창이 얼어붙음 | `while True` 로 조종 루프를 돌림 | `root.after(20, tick)` |
+| 이륙 명령이 20ms 마다 반복 전송됨 | 눌린 키 전체를 매 주기 처리 | `new_keys = now_keys - prev_keys` |
+| 창을 벗어났더니 드론이 계속 이동 | 포커스를 잃으면 `KeyRelease` 를 못 받아 키가 눌린 채로 남음 | `<FocusOut>` 에서 집합 비우기 |
+| `sudo python` 이 `ModuleNotFoundError` | sudo 가 환경변수를 갈아엎어 venv 가 풀림 | `sudo .venv/bin/python ...` |
+| 대각선 이동이 안 됨 | `elif` 체인은 키 하나만 처리 | 축별로 모아 `sendControl` 한 번 |
 
 ## 주요 상수
 
 `04_api_explorer.py` 로 전체를 뽑을 수 있다. 실습에 쓰는 것만 추리면,
 
-- **`FlightEvent`** — `TakeOff` `Landing` `Stop` `FlipFront/Rear/Left/Right` `ResetHeading`
+- **`FlightEvent`** — `TakeOff` `Landing` `Stop` `Reverse` `Return` `FlipFront/Rear/Left/Right` `ResetHeading`
+  (`sendTakeOff`/`sendLanding` 은 이 중 둘을 감싼 래퍼다. 나머지는 `sendFlightEvent()` 로)
 - **`ModeControlFlight`** — 보통 `Attitude`(자세 제어). `Position` 은 위치 센서 필요
 - **`DataType`** — `State`(0x40) 배터리·비행상태, `Attitude`(0x41) 기울기,
   `Altitude`(0x43) 고도, `Motion`(0x44) 가속도·자이로·각도, `Range`(0x45) 거리센서
@@ -506,7 +641,9 @@ dron.sendStop()
 
 넓은 실내 공간, 프로펠러 가드 장착은 기본.
 
-**실제로 이륙하는 파일은 `23_sensor_bottom_landing.py` 와 `24_sensor_front_landing.py` 둘뿐이다.**
+**실제로 이륙하는 파일은 `23` `24` `27` `28` `29` 다섯 개다.**
 (`21_sensor_altitude.py` 는 `TAKEOFF = True` 로 바꿨을 때만.) 나머지는 전부 책상 위에서 돌아간다.
-두 파일 모두 이륙 전 3초 카운트다운을 찍고, `Ctrl+C` 로 중단해도 착륙 명령이 나간다.
+`23`/`24` 는 이륙 전 3초 카운트다운을 찍고, `27`~`29` 는 `1` 키를 눌러야 뜬다.
+다섯 개 모두 `Ctrl+C` 나 창 닫기로 중단해도 착륙 명령이 나간다.
+`29` 는 `SIMULATION = True` 로 두면 드론 없이 화면·키 동작만 확인할 수 있다.
 손은 프로펠러에 닿지 않게 **아래쪽 / 정면에서 천천히** 넣을 것.
