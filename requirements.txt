@@ -15,3 +15,6 @@ matplotlib                   # 맥 주피터에서 이미지 보기 (BGR -> RGB)
 
 # 28강 Pygame (59~61) — OpenCV 프레임을 창에 띄우고 도형·글자를 덧그린다
 pygame                       # 확인한 환경: 2.6.1 (SDL 2.28.4)
+
+# 29강 객체 탐지 (63) — 선택. torch 가 함께 딸려 와 용량이 크다
+# ultralytics
