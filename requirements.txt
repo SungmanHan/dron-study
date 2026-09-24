@@ -16,5 +16,13 @@ matplotlib                   # 맥 주피터에서 이미지 보기 (BGR -> RGB)
 # 28강 Pygame (59~61) — OpenCV 프레임을 창에 띄우고 도형·글자를 덧그린다
 pygame                       # 확인한 환경: 2.6.1 (SDL 2.28.4)
 
+# 35강 추적기 (72, 73) — 선택.
+# CSRT/KCF/MOSSE 는 contrib 에만 있다. 확인한 결과 일반 opencv-python 4.10.0 에는
+# TrackerCSRT_create 도 cv2.legacy 도 없다(72 참고). 필요하면 아래처럼 **교체**한다.
+# 같은 cv2 폴더에 설치되므로 두 패키지를 함께 두면 충돌한다.
+#   pip uninstall -y opencv-python
+#   pip install "opencv-contrib-python==4.10.0.84"
+# 교체하지 않으면 72/73 은 TrackerMIL 로 돌아간다.
+
 # 29강 객체 탐지 (63) — 선택. torch 가 함께 딸려 와 용량이 크다
 # ultralytics
