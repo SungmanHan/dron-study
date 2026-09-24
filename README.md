@@ -76,6 +76,8 @@ CodingDrone(파이썬) 으로 드론 제어를 실습하면서 정리한 내용.
 | `66_assignment_person_blind.py` | [과제] 사람만 찾아 가리기 (채우기 / 반투명 / 모자이크) 📷 |
 | `67_tracker_basics.py` | 추적의 원리를 손으로 — IoU 매칭·ID 발급·소멸 (숫자만) |
 | `68_object_tracking_camera.py` | 사물 추적 — ID + 궤적 (`model.track`) 📷 |
+| `69_mask_overlay_basics.py` | 마스크를 화면에 덮기 — SRCALPHA · 잠금 · 축 변환 |
+| `70_sam_segmentation.py` | SAM — 클릭/드래그 프롬프트로 분할 📷 |
 
 ⚠️이륙 = 드론이 실제로 뜬다 / 📷 = 카메라를 쓴다(`45` 는 `SOURCE = "demo"` 로 카메라 없이도 돌아간다)
 
@@ -1629,6 +1631,80 @@ model.track(frame, persist=True, ...)   # ID 까지. persist 를 빼면 매 프�
 트래커로 ID 를 붙인다. 5 초(142 프레임)를 돌리면 물체는 둘인데 **발급된 ID 는 셋** —
 가운데서 스치며 한 번 갈아 끼워졌다는 뜻이다. YOLO 를 붙여도 같은 일이 일어난다.
 
+## 분할(Segmentation) — 박스가 아니라 픽셀
+
+33 강. (`69`, `70`) 탐지는 `(x1, y1, x2, y2)` 네 숫자였지만, 분할은 **픽셀마다 참/거짓**인
+`H x W` bool 배열이 나온다. 그리는 법도 다르다 — 참인 자리만 색칠한 반투명 판을 영상 위에 덮는다.
+
+### SAM 이 앞의 모델들과 다른 점
+
+YOLO 는 **미리 정한 80 종**을 찾는다. SAM 은 클래스를 모르고, "여기" 라고 찍어 주면 그 덩어리를
+분할한다(제로샷). 프롬프트는 점 · 박스 · 마스크 · (연구 수준의) 텍스트.
+
+| 구성 | 역할 |
+|---|---|
+| Image Encoder | 이미지를 한 번 인코딩 — 가장 무겁다 |
+| Prompt Encoder | 점·박스 프롬프트를 인코딩 |
+| Mask Decoder | 둘을 합쳐 마스크를 빠르게 출력 |
+
+이미지 인코딩은 한 번만 하고 프롬프트가 바뀔 때는 가벼운 디코더만 다시 돈다 — 클릭할 때마다
+바로 반응하는 이유다. 점 하나는 "셔츠" 일 수도 "사람 전체" 일 수도 있어서, SAM 은 **여러 후보
+마스크와 점수**를 함께 낸다(모호성 해결).
+
+### 괄호 깊이가 의미를 바꾼다
+
+```python
+model(frame, points=[[x1, y1], [x2, y2]], labels=[1, 1])      # 점마다 따로 분할 (마스크 2개)
+model(frame, points=[[[x1, y1], [x2, y2]]], labels=[[1, 0]])  # 한 객체의 전경·배경 점 (마스크 1개)
+model(frame, bboxes=[x1, y1, x2, y2])                          # 박스 프롬프트
+```
+
+원하지 않는 부분을 빼려면 **한 겹 더 감싼** 두 번째 형태여야 한다.
+결과는 `results[0].masks.data[0].cpu().numpy().astype(bool)` 로 꺼낸다(GPU 텐서일 수 있어 `.cpu()`).
+
+### 마스크를 덮는 두 가지 방법 — 하나는 함정이 있다
+
+강의 방식은 Surface 픽셀 배열을 직접 건드린다. 그런데 `pixels3d`/`pixels_alpha` 를 잡는 순간
+**Surface 가 잠긴다.** `del` 로 참조를 지우지 않고 `blit` 하면 이렇게 터진다:
+
+```
+pygame.error: pygame_Blit: Surfaces must not be locked during blit
+```
+
+(`get_locked()` 가 `True` → `del` 후 `False` 가 되는 것까지 `69` 에서 확인한다.)
+RGBA 배열을 만들어 `frombuffer` 로 넘기면 잠금 자체가 없다.
+
+| 방법 | 640x480 200회 | 잠금 |
+|---|---|---|
+| `pixels3d` + `pixels_alpha` + `del` | 5.65 ms/장 | 있다 (빼먹으면 에러) |
+| RGBA 배열 + `image.frombuffer` | **4.67 ms/장** | 없다 |
+
+**마스크도 축을 바꿔야 한다** — numpy `(y, x)` vs surfarray `(x, y)`. 안 바꾸면 조용히 뒤집히는 게
+아니라 `IndexError: boolean index did not match indexed array ... dimension is 640 but ... 480` 이 난다.
+알파 128 이면 검은 배경 위에서 `(0, 128, 0)` — 66 의 블라인드와 같은 계산이다.
+
+### 설치 없이 확인하기 — OpenCV 로 흉내 낸 프롬프트 분할
+
+`SEGMENTER = "demo"` 면 SAM 대신 고전 방식으로 같은 흐름을 돌린다.
+
+| 프롬프트 | demo 구현 | 측정값 |
+|---|---|---|
+| 점 (클릭) | `cv.floodFill` — 클릭한 색과 이어진 영역 | 25,445px / **5 ms** |
+| 박스 (드래그) | `cv.grabCut` — 박스 안에서 전경 분리 | 32,761px / **407 ms** |
+
+색과 연결성만 보는 방식이라 **의미를 모른다** — 26 강에서 본 수동 특징의 한계 그대로다.
+SAM 과 결과가 다른 게 당연하고, 그 차이를 보는 것도 공부가 된다.
+
+### ⚠️ 마스크는 그 순간에 고정된다
+
+클릭한 프레임으로 한 번만 추론하므로 물체가 움직여도 마스크는 그 자리에 남는다.
+매 프레임 분할하면 따라가지만 느려서 못 쓴다 → **정지된 장면에서 실습**한다.
+추론 동안 화면이 멈추므로, `70` 은 요청을 `pending` 에 적어 두고 다음 프레임에서 처리하며
+그 직전에 "Inferencing..." 을 먼저 그린다.
+
+강의 코드에는 `cap.release()`/`pygame.quit()` 가 없고, 카메라가 640x480 을 안 주면
+**마스크 크기와 화면 크기가 어긋나 인덱싱 오류**가 난다 → `try/finally` + `cv.resize` 로 막았다.
+
 ## 삽질 기록
 
 | 증상 | 원인 | 해결 |
@@ -1772,6 +1848,11 @@ model.track(frame, persist=True, ...)   # ID 까지. persist 를 빼면 매 프�
 | 박스가 좌우로 어긋남 | 그리기 직전에 `flip` 해서 추론은 원본으로 돌았다 | 탐지 **전에** 뒤집는다 |
 | 가려졌다 나타나면 ID 가 바뀜 | 탐지가 끊긴 사이 매칭이 끊긴다 | `conf` 를 낮추거나 트래커의 대기 프레임을 늘린다 |
 | 두 사람이 스칠 때 ID 가 서로 바뀜 | 위치만으로는 구분 불가 (ID Switch) | 트래커의 고질병 — 칼만 필터가 속도를 함께 본다 |
+| `Surfaces must not be locked during blit` | `pixels3d`/`pixels_alpha` 가 Surface 를 잠근다 | `del` 로 참조 해제, 또는 RGBA `frombuffer` |
+| 마스크 인덱싱에서 `IndexError` | numpy `(y,x)` ↔ surfarray `(x,y)` | 마스크도 `swapaxes(0, 1)` |
+| 마스크가 화면과 어긋남 | 카메라가 요청 해상도를 무시했다 | `cv.resize` 로 프레임 크기 고정 |
+| 빼고 싶은 영역이 안 빠짐 | `points=[[x,y],...]` 는 점마다 **따로** 분할 | 한 겹 더 감싼 `points=[[[...]]]`, `labels=[[1,0]]` |
+| 물체를 움직였더니 마스크가 따로 논다 | 클릭한 순간의 프레임으로 한 번만 추론 | 정지 장면에서 실습하거나 다시 클릭 |
 
 ## 주요 상수
 
